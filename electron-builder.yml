@@ -1,0 +1,69 @@
+appId: com.iris.assistant
+productName: IRIS
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**
+  - package.json
+  # Everything not bundled by Rollup is required at runtime. electron-builder resolves the
+  # production dependency tree itself, so devDependencies are not swept in by this.
+  - node_modules/**
+
+# Wake word models, kept outside asar because onnxruntime reads them from a real path. Shipped
+# with the code rather than written to userData: they are part of the app, so it is correct for
+# Velopack to replace them wholesale on update. Absent models simply disable the wake word.
+extraResources:
+  - from: models
+    to: models
+    filter:
+      - '*.onnx'
+
+# Native addons are loaded through process.dlopen, which needs a real path on disk. Without
+# unpacking, Electron extracts to a temp file on every load — slow, and a reliable way to
+# trip antivirus on Windows.
+asar: true
+asarUnpack:
+  - '**/*.node'
+  - node_modules/onnxruntime-node/**/*
+  - node_modules/velopack/**/*
+  # Playwright resolves and spawns a browser executable, which it cannot do from inside asar.
+  - node_modules/playwright-core/**/*
+
+win:
+  target:
+    # `dir` on purpose: vpk turns the unpacked directory into the installer and release feed, so
+    # letting electron-builder also build one would produce a second, unmanaged update mechanism.
+    - target: dir
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  files:
+    # Velopack ships a native binary for every platform it supports; the five we do not run are
+    # about 16 MB, which is also 16 MB on every full update download. Listed as exclusions rather
+    # than an exclude-all plus a re-include, because a wildcard exclusion cannot be undone by a
+    # later include — doing that strips every binary and Velopack then fails at require time.
+    - '!node_modules/velopack/lib/native/*_linux_*'
+    - '!node_modules/velopack/lib/native/*_osx*'
+    - '!node_modules/velopack/lib/native/*_win_x86_*'
+    - '!node_modules/velopack/lib/native/*_win_arm64_*'
+    # onnxruntime ships 259 MB of binaries for five platform/arch pairs. Only win32/x64 is ever
+    # loaded here, so the rest are 198 MB of installer and update payload for nothing.
+    - '!node_modules/onnxruntime-node/bin/napi-v6/darwin/**'
+    - '!node_modules/onnxruntime-node/bin/napi-v6/linux/**'
+    - '!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**'
+
+mac:
+  target:
+    - dir
+  category: public.app-category.productivity
+  files:
+    - '!node_modules/velopack/lib/native/*_linux_*'
+    - '!node_modules/velopack/lib/native/*_win_*'
+    - '!node_modules/onnxruntime-node/bin/napi-v6/win32/**'
+    - '!node_modules/onnxruntime-node/bin/napi-v6/linux/**'
+
+linux:
+  target:
+    - dir

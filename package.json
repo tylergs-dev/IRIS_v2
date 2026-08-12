@@ -1,0 +1,53 @@
+{
+  "name": "iris",
+  "version": "0.1.0",
+  "description": "IRIS — an AI voice conversational assistant for blind users, focused on Gmail triage",
+  "private": true,
+  "main": "./out/main/index.js",
+  "author": "IRIS",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "lint": "eslint .",
+    "pack:dir": "npm run build && electron-builder --dir",
+    "pack:win": "npm run build && electron-builder --win --dir",
+    "release:win": "npm run pack:win && node scripts/release-win.mjs",
+    "models": "node scripts/fetch-wakeword-models.mjs"
+  },
+  "dependencies": {
+    "@google/genai": "2.16.0",
+    "@googleapis/gmail": "18.0.0",
+    "cheerio": "^1.2.0",
+    "google-auth-library": "10.5.0",
+    "html-to-text": "^10.0.0",
+    "onnxruntime-node": "^1.27.0",
+    "playwright-core": "1.62.1",
+    "velopack": "1.2.0"
+  },
+  "devDependencies": {
+    "@types/html-to-text": "^9.0.4",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "43.4.0",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.10.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.67.0",
+    "vite": "^7.1.10",
+    "zustand": "5.0.14"
+  }
+}
