@@ -1,5 +1,6 @@
 import { Type } from '@google/genai'
 import type { SpeechPace, SummaryLength } from '../../shared/types'
+import { LIVE_VOICES, VOICE_NAMES, describeVoice, isVoiceName } from '../../shared/voices'
 import { createLogger } from '../log'
 import { gmail } from '../skills/email/GmailService'
 import { startTask } from '../skills/tasks'
@@ -139,6 +140,52 @@ export function registerSettingsTools(): void {
 
   registerTool({
     declaration: {
+      name: 'change_your_voice',
+      description:
+        'Change which voice you speak in, and keep it for future conversations. Call this when ' +
+        'the user asks for a different voice, a man or a woman, or something warmer, softer, ' +
+        'deeper, calmer, younger, or clearer than how you sound now. If they have not named one, ' +
+        'pick the option that best matches what they described rather than reading the list out. ' +
+        `The available voices, each with how it sounds, are: ${voiceMenu()}.`,
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          voice: {
+            type: Type.STRING,
+            enum: VOICE_NAMES,
+            description: 'The name of the voice to switch to.'
+          }
+        },
+        required: ['voice']
+      }
+    },
+    handler: async (args) => {
+      if (!isVoiceName(args.voice)) {
+        return {
+          error:
+            'That is not one of the available voices. Ask what they would like you to sound ' +
+            'like, then choose the closest match yourself.'
+        }
+      }
+
+      // Applied by reopening the Live session, because the voice is fixed when a session is set
+      // up. That takes a moment and clears what has been said so far, so the acknowledgement
+      // here has to be the last thing said in the old voice.
+      setProfile({ voiceName: args.voice })
+      log.info(`voice change requested: ${args.voice}`)
+
+      return {
+        ok: true,
+        note:
+          `Say only "Switching now" or something equally short, then stop talking. You will ` +
+          `start speaking again as ${describeVoice(args.voice)} in a moment and can ask then ` +
+          'whether they like it. Do not explain what is happening or say anything else now.'
+      }
+    }
+  })
+
+  registerTool({
+    declaration: {
       name: 'recall_what_you_know',
       description:
         'Everything remembered about the user. Call this when they ask what you know or remember ' +
@@ -213,4 +260,12 @@ export function registerSettingsTools(): void {
       return { ok: true, note: 'Confirm briefly.' }
     }
   })
+}
+
+/**
+ * The voice names carry no meaning on their own, so the descriptions go in the tool description
+ * itself — otherwise "can you sound gentler" has nothing to match against.
+ */
+function voiceMenu(): string {
+  return LIVE_VOICES.map((voice) => `${voice.name} (${voice.description})`).join(', ')
 }

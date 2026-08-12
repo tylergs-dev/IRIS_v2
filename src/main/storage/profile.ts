@@ -1,4 +1,5 @@
 import type { SpeechPace, SummaryLength, UserProfile } from '../../shared/types'
+import { DEFAULT_VOICE, type VoiceName } from '../../shared/voices'
 import { JsonStore } from './json-store'
 
 const defaults: UserProfile = {
@@ -8,6 +9,7 @@ const defaults: UserProfile = {
   city: null,
   region: null,
   timezone: null,
+  voiceName: DEFAULT_VOICE,
   speechPace: 'normal',
   summaryLength: 'short',
   digestSenders: [],
@@ -27,20 +29,35 @@ function getStore(): JsonStore<UserProfile> {
 }
 
 const listeners = new Set<(profile: UserProfile) => void>()
+const voiceListeners = new Set<(voice: VoiceName) => void>()
 
 export function getProfile(): UserProfile {
   return getStore().get()
 }
 
 export function setProfile(patch: Partial<UserProfile>): UserProfile {
+  const previousVoice = getProfile().voiceName
   const next = getStore().set(patch)
   for (const listener of listeners) listener(next)
+  if (next.voiceName !== previousVoice) {
+    for (const listener of voiceListeners) listener(next.voiceName)
+  }
   return next
 }
 
 export function onProfileChange(listener: (profile: UserProfile) => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
+}
+
+/**
+ * Separate from `onProfileChange` because the voice is the one setting that cannot be picked up
+ * where it is read: it is fixed when the Live connection is set up, so it needs its own signal to
+ * reopen that connection rather than waiting for whenever the next one happens to be made.
+ */
+export function onVoiceChange(listener: (voice: VoiceName) => void): () => void {
+  voiceListeners.add(listener)
+  return () => voiceListeners.delete(listener)
 }
 
 /** Words-per-minute guidance handed to the model, since TTS rate is not directly settable. */

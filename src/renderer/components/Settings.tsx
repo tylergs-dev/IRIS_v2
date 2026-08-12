@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { SecretName, SpeechPace, SummaryLength, UserProfile } from '@shared/types'
+import { DEFAULT_VOICE, LIVE_VOICES, type VoiceName } from '@shared/voices'
 import { useStore } from '../store'
 
 function KeyField({
@@ -158,6 +159,24 @@ export function Settings(): React.JSX.Element {
 
         <section className="card">
           <h3>Voice and pacing</h3>
+          <div className="field">
+            <label htmlFor="voice">Speaking voice</label>
+            <select
+              id="voice"
+              value={profile?.voiceName ?? DEFAULT_VOICE}
+              onChange={(event) => patch({ voiceName: event.target.value as VoiceName })}
+            >
+              {LIVE_VOICES.map((voice) => (
+                <option key={voice.name} value={voice.name}>
+                  {voice.name} — {voice.description}
+                </option>
+              ))}
+            </select>
+            <span className="hint">
+              IRIS says a short line in the new voice as soon as you pick one, so you can hear it
+              before deciding. Changing it starts a fresh conversation.
+            </span>
+          </div>
           <div className="grid-2">
             <div className="field">
               <label htmlFor="pace">Speaking pace</label>

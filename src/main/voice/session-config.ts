@@ -7,6 +7,7 @@ import {
   type LiveConnectConfig
 } from '@google/genai'
 import type { UserProfile } from '../../shared/types'
+import { DEFAULT_VOICE, isVoiceName } from '../../shared/voices'
 import { personaInstruction } from '../prompts/persona'
 
 /**
@@ -38,6 +39,16 @@ export function buildSessionConfig({
     // Native-audio models only support AUDIO output; transcription is the only way to get text.
     responseModalities: [Modality.AUDIO],
     systemInstruction: { parts: [{ text: personaInstruction(profile) }] },
+
+    // Read defensively: an unknown name is rejected at setup, which would leave IRIS unable to
+    // speak at all, and a profile edited by hand is a cheaper thing to shrug off than that.
+    speechConfig: {
+      voiceConfig: {
+        prebuiltVoiceConfig: {
+          voiceName: isVoiceName(profile.voiceName) ? profile.voiceName : DEFAULT_VOICE
+        }
+      }
+    },
 
     // Mirrors both sides of the conversation into the chat log.
     inputAudioTranscription: {},

@@ -1,3 +1,5 @@
+import type { VoiceName } from './voices'
+
 export type VoiceState = 'asleep' | 'listening' | 'thinking' | 'speaking'
 
 export type ChatRole = 'user' | 'iris' | 'system'
@@ -47,6 +49,8 @@ export interface UserProfile {
   city: string | null
   region: string | null
   timezone: string | null
+  /** Which prebuilt Gemini voice IRIS speaks in. Only applied when a session is opened. */
+  voiceName: VoiceName
   speechPace: SpeechPace
   summaryLength: SummaryLength
   /** Senders always treated as link-digest newsletters, bypassing heuristics. */
