@@ -42,7 +42,7 @@ export const LIVE_VOICES = [
 export type VoiceName = (typeof LIVE_VOICES)[number]['name']
 
 /** What the Live API uses when no voice is given, so upgrading a profile changes nothing. */
-export const DEFAULT_VOICE: VoiceName = 'Puck'
+export const DEFAULT_VOICE: VoiceName = 'Aoede'
 
 export const VOICE_NAMES: VoiceName[] = LIVE_VOICES.map((voice) => voice.name)
 

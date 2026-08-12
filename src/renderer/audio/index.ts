@@ -5,8 +5,10 @@ import {
   type CaptureMessage,
   type PlayerCommand
 } from '@shared/audio'
+import type { VoiceState } from '@shared/types'
 import captureWorkletUrl from './capture.worklet.ts?worklet-url'
 import playerWorkletUrl from './player.worklet.ts?worklet-url'
+import { playEarcon, stopEarcons } from './earcons'
 import { useStore } from '../store'
 
 function workletUrl(path: string): string {
@@ -28,6 +30,8 @@ class AudioBridge {
   /** Playback generation. Anything older than this was invalidated by a barge-in. */
   private generation = 1
   private starting: Promise<void> | null = null
+  /** Last voice state seen on this graph, so wake/sleep chimes fire only on the asleep boundary. */
+  private lastVoiceState: VoiceState | null = null
 
   async start(): Promise<void> {
     this.starting ??= this.doStart()
@@ -37,10 +41,12 @@ class AudioBridge {
   private async doStart(): Promise<void> {
     await this.startPlayback()
     await this.startCapture()
-    this.subscribe()
-    // The state event only fires on change, so seed the capture gate from the current state.
+    // Seed before subscribing so a wake that lands during startup is heard, and so a reload
+    // of an already-awake session does not replay the wake chime.
     const state = await window.iris.invoke('voice:getState')
+    this.lastVoiceState = state
     this.toCapture({ type: 'enable', value: state !== 'asleep' })
+    this.subscribe()
   }
 
   private toCapture(command: CaptureCommand): void {
@@ -138,6 +144,7 @@ class AudioBridge {
     // Turn boundaries double as the drain signal, so the last sub-waterline chunk still plays
     // instead of being stranded below the prebuffer threshold.
     window.iris.on('voice:state', (state) => {
+      this.onVoiceState(state)
       if (state !== 'speaking') this.toPlayer({ type: 'drain' })
       this.toCapture({ type: 'enable', value: state !== 'asleep' })
     })
@@ -147,7 +154,21 @@ class AudioBridge {
     })
   }
 
+  /**
+   * Earcons only mark crossing asleep ↔ awake. Listening/thinking/speaking chatter is already
+   * covered by IRIS's own voice, and chiming on every hop would just be noise.
+   */
+  private onVoiceState(state: VoiceState): void {
+    const previous = this.lastVoiceState
+    this.lastVoiceState = state
+    if (!this.playbackContext || previous === null || previous === state) return
+    if (previous === 'asleep') playEarcon(this.playbackContext, 'wake')
+    else if (state === 'asleep') playEarcon(this.playbackContext, 'sleep')
+  }
+
   stop(): void {
+    stopEarcons(this.playbackContext ?? undefined)
+    this.lastVoiceState = null
     for (const track of this.stream?.getTracks() ?? []) track.stop()
     void this.captureContext?.close()
     void this.playbackContext?.close()
