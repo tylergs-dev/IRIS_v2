@@ -9,6 +9,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 const root = path.resolve(import.meta.dirname, '..')
@@ -32,15 +33,38 @@ if (process.platform !== 'win32') {
   )
 }
 
+/**
+ * `dotnet tool install -g` puts binaries in ~/.dotnet/tools. The .NET installer is supposed to
+ * add that to PATH, but a lot of Windows machines never get the user-PATH refresh, so looking
+ * up `vpk` by name fails even though `dotnet tool list -g` says it is there.
+ */
+function resolveVpk() {
+  const exe = process.platform === 'win32' ? 'vpk.exe' : 'vpk'
+  const fallback = path.join(os.homedir(), '.dotnet', 'tools', exe)
+  if (existsSync(fallback)) return fallback
+  return exe.replace(/\.exe$/, '')
+}
+
+const vpk = resolveVpk()
+
 let vpkVersion
 try {
-  vpkVersion = execFileSync('vpk', ['--version'], { encoding: 'utf8' }).trim()
-} catch {
-  fail(
-    'vpk was not found. Install the .NET SDK, then:\n' +
-      `  dotnet tool install -g vpk --version ${pkg.dependencies.velopack}`
-  )
+  // vpk has no --version. The CLI prints "Velopack CLI 1.2.0" at the top of --help.
+  const help = execFileSync(vpk, ['--help'], { encoding: 'utf8' })
+  vpkVersion = help.match(/Velopack CLI\s+(\S+)/)?.[1] ?? ''
+} catch (error) {
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : null
+  if (code === 'ENOENT') {
+    fail(
+      'vpk was not found. Install the .NET SDK, then:\n' +
+        `  dotnet tool install -g vpk --version ${pkg.dependencies.velopack}\n` +
+        'If it is already installed, add %USERPROFILE%\\.dotnet\\tools to your user PATH.'
+    )
+  }
+  const stdout = error && typeof error === 'object' && 'stdout' in error ? String(error.stdout) : ''
+  vpkVersion = stdout.match(/Velopack CLI\s+(\S+)/)?.[1] ?? ''
 }
+if (!vpkVersion) fail(`Could not read a version from "${vpk} --help".`)
 
 // The npm binding and the CLI share a release cadence and a package format; drift between them is
 // the kind of failure that only shows up on the user's machine, at update time.
@@ -87,8 +111,8 @@ if (process.env.IRIS_AZURE_SIGN_FILE) {
   )
 }
 
-console.log(`\nvpk ${args.join(' ')}\n`)
-const result = spawnSync('vpk', args, { stdio: 'inherit', shell: false })
+console.log(`\n${vpk} ${args.join(' ')}\n`)
+const result = spawnSync(vpk, args, { stdio: 'inherit', shell: false })
 if (result.status !== 0) fail(`vpk exited with ${result.status ?? 'a signal'}.`)
 
 console.log(

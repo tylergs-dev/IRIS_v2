@@ -1,0 +1,2 @@
+- Goodbye sign off skipping / cutting early
+- Web browse not working?
