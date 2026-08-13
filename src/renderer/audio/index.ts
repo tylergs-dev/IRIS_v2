@@ -41,12 +41,23 @@ class AudioBridge {
   private async doStart(): Promise<void> {
     await this.startPlayback()
     await this.startCapture()
-    // Seed before subscribing so a wake that lands during startup is heard, and so a reload
-    // of an already-awake session does not replay the wake chime.
-    const state = await window.iris.invoke('voice:getState')
+    // Subscribe before the first wake:listening replay. startWakeWord often emits that event
+    // while getUserMedia is still opening, and a missed one means the worklet never sends
+    // frames while IRIS is asleep.
+    this.subscribe()
+    const [state, health] = await Promise.all([
+      window.iris.invoke('voice:getState'),
+      window.iris.invoke('health:get')
+    ])
+    // Seed after subscribing so a wake that lands during startup is heard, and so a reload
+    // of an already-awake session does not replay the wake chime. onVoiceState ignores
+    // events until this is set.
     this.lastVoiceState = state
     this.toCapture({ type: 'enable', value: state !== 'asleep' })
-    this.subscribe()
+    this.toCapture({
+      type: 'wakeListening',
+      value: state === 'asleep' && health.wakeWord === 'online'
+    })
   }
 
   private toCapture(command: CaptureCommand): void {

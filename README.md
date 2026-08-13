@@ -49,17 +49,17 @@ the refresh token after seven days and IRIS would ask the user to sign in again 
 Saying "hey IRIS" wakes it. Ctrl+Shift+I does the same and always works, including when another
 window has focus, so the wake word is a convenience rather than the way in.
 
-Detection is [openWakeWord](https://github.com/dscripka/openWakeWord)'s three-stage pipeline running
-locally through `onnxruntime-node`: a mel-spectrogram model, a shared speech embedding model, and a
-small classifier trained on one phrase. Audio never leaves the machine unless IRIS is awake, and a
-loudness gate means silence costs nothing. `npm run models` fetches the first two. The third,
-`models/hey_iris.onnx`, has to be trained, and without it the wake word is simply off — IRIS logs
-that once and carries on.
+Detection is [livekit-wakeword](https://github.com/livekit/livekit-wakeword)'s three-stage pipeline
+running locally through `onnxruntime-node`: a mel-spectrogram model, a shared speech embedding
+model, and a small conv-attention classifier trained on one phrase. Audio never leaves the machine
+unless IRIS is awake, and a loudness gate means silence costs nothing. `npm run models` fetches the
+first two. The third, `models/iris.onnx`, is trained with livekit-wakeword and committed with the
+app. Without any of the three, the wake word is simply off — IRIS logs that once and carries on.
 
-To train it, run openWakeWord's automatic training notebook in Google Colab with the target phrase
-"hey iris", rename the resulting model to `hey_iris.onnx`, and put it in `models/`. Training is
-Linux-only, and the notebook's pinned dependencies have gone stale since its last release, so
-budget time for repairing the environment before any training starts.
+To retrain it, install livekit-wakeword and run its pipeline with the target phrase "hey iris",
+then replace `models/iris.onnx` with the exported classifier. PCM is scaled to [-1, 1] before the
+mel model, matching how livekit-wakeword trains; feeding int16-scale floats will silently prevent
+the classifier from firing.
 
 Two things matter more than accuracy on a held-out set:
 

@@ -17,7 +17,7 @@ export async function startWakeWord(): Promise<void> {
   const missing = wakeWord.missingModels()
   if (missing.length > 0) {
     // Not worth speaking about: the hotkey is a first-class path rather than a fallback, and the
-    // classifier has to be trained per wake word, so most installs will not have one.
+    // two feature models are fetched rather than shipped, so a fresh clone will not have them.
     log.info(`wake word not enabled (missing ${missing.join(', ')}); hotkey remains available`)
     return
   }

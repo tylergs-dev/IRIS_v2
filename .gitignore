@@ -8,5 +8,6 @@ Releases/
 .env
 .env.local
 tsconfig.*.tsbuildinfo
-# Fetched by `npm run models`, or trained separately. Binaries do not belong in the repo.
+# Fetched by `npm run models`. The trained classifier is small and ships with the app.
 models/*.onnx
+!models/iris.onnx

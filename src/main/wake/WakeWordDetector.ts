@@ -9,58 +9,68 @@ import { createLogger } from '../log'
 const log = createLogger('wake')
 
 /**
- * openWakeWord's three-stage pipeline, ported to onnxruntime-node. The two feature models are
- * shared and shipped as-is; only the small classifier is specific to "hey iris".
+ * livekit-wakeword's three-stage pipeline, running through onnxruntime-node. The two feature
+ * models are the same frozen extractors openWakeWord published; only the classifier is specific
+ * to "hey iris", trained with livekit-wakeword's conv-attention head.
  *
  * All three shapes below were read off the models rather than taken from documentation:
  *   melspectrogram : [1, samples]      -> [1, 1, frames, 32]
- *   embedding      : [1, 76, 32, 1]    -> [1, 1, 1, 96]
+ *   embedding      : [N, 76, 32, 1]    -> [N, 1, 1, 96]
  *   classifier     : [1, 16, 96]       -> [1, 1]
+ *
+ * Inference matches the Python listener: a rolling ~2 s window is scored as a whole, not as
+ * incremental 80 ms STFT hops. Training extracted embeddings from complete clips, and a short
+ * wake phrase never fills a 2.1 s streaming buffer if silence is skipped.
  */
 const MODEL_FILES = {
   melspectrogram: 'melspectrogram.onnx',
   embedding: 'embedding_model.onnx',
-  classifier: 'hey_iris.onnx'
+  classifier: 'iris.onnx'
 } as const
 
-/**
- * Frame arithmetic, verified empirically: the model emits `samples / 160 - 3` frames, so feeding
- * one 1280-sample chunk plus 480 samples of overlap yields exactly the 8 new frames that chunk is
- * responsible for. Dropping the overlap loses a frame per chunk and drifts the alignment the
- * classifier was trained on.
- */
-const MEL_OVERLAP_SAMPLES = 480
-const MEL_FRAMES_PER_CHUNK = 8
-
-/**
- * One embedding covers 76 mel frames; consecutive embeddings step forward by one chunk. Together
- * with the classifier's 16-embedding window this means detection needs 26 consecutive chunks —
- * about 2.1 seconds of unbroken audio — before it can produce a score at all. That is why the
- * capture worklet streams continuously while asleep instead of gating on loudness: gating there
- * would cut the audio off long before the pipeline had filled.
- */
+/** 2 s at 16 kHz. Yields 197 mel frames and exactly 16 embedding windows. */
+const WINDOW_SAMPLES = 32_000
 const EMBEDDING_MEL_FRAMES = 76
+const EMBEDDING_STRIDE = 8
 const CLASSIFIER_EMBEDDINGS = 16
 const MEL_BINS = 32
 const EMBEDDING_SIZE = 96
 
 /**
- * Tuned for low false-accept rather than low false-reject, deliberately. A missed wake word costs
- * the user one repetition; a false one means IRIS starts listening and talking in a room where
- * nobody addressed it, which a blind user has no way to notice and no easy way to attribute.
+ * This classifier's observed scores on-device: room silence ~0.02, a spoken "hey iris" ~0.21–0.32.
+ * livekit-wakeword's 0.6 default is for their highly confident "hey livekit" head and would never
+ * fire here. 0.13 sits in the gap. Two consecutive 80 ms frames avoid a single noise blip.
  */
-const DEFAULT_THRESHOLD = 0.6
-/** Consecutive chunks over threshold. At 80 ms each, three is 240 ms of sustained agreement. */
-const REQUIRED_CONSECUTIVE = 3
+const DEFAULT_THRESHOLD = 0.13
+/** Consecutive chunks over threshold. At 80 ms each, two is 160 ms of agreement. */
+const REQUIRED_CONSECUTIVE = 2
 /** After firing, ignore audio for long enough that one utterance cannot trigger twice. */
 const REFRACTORY_MS = 2000
 
 /**
- * Below this RMS (in int16 units) the pipeline is skipped entirely. Roughly a quiet room; speech
- * at a normal distance is an order of magnitude above it. This is the VAD gate, and it is what
- * makes always-on detection affordable — silence costs nothing.
+ * Below this RMS (in int16 units) the latest frame is treated as silence and inference is
+ * skipped. The 2 s window still advances, so the next spoken frame is scored with real context
+ * rather than a buffer that never filled.
  */
 const SILENCE_RMS = 120
+
+/**
+ * Electron's IPC often delivers ArrayBuffers as a Node Buffer (a Uint8Array view into a pool).
+ * `new Int16Array(buffer)` then treats each byte as a sample, so length is 2560 instead of 1280
+ * and every frame is dropped. Gemini never hits this because it copies with `Buffer.from`.
+ */
+function pcm16FromIpc(pcm: ArrayBuffer | ArrayBufferView): Int16Array | null {
+  const bytes = ArrayBuffer.isView(pcm)
+    ? new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)
+    : new Uint8Array(pcm)
+  if (bytes.byteLength !== CAPTURE_FRAME_SAMPLES * 2) return null
+  if (bytes.byteOffset % 2 === 0) {
+    return new Int16Array(bytes.buffer, bytes.byteOffset, CAPTURE_FRAME_SAMPLES)
+  }
+  const aligned = new ArrayBuffer(bytes.byteLength)
+  new Uint8Array(aligned).set(bytes)
+  return new Int16Array(aligned)
+}
 
 export class WakeWordDetector {
   private sessions: {
@@ -71,27 +81,29 @@ export class WakeWordDetector {
   private loading: Promise<boolean> | null = null
   private TensorCtor: typeof Tensor | null = null
 
-  /**
-   * All three buffers are fixed-size and shifted in place. This loop runs twelve times a second
-   * for as long as IRIS is asleep, so allocating per chunk would mean garbage collection pauses
-   * during audio playback.
-   */
-  private raw = new Float32Array(CAPTURE_FRAME_SAMPLES + MEL_OVERLAP_SAMPLES)
-  private rawFilled = 0
-
-  /** Exactly one embedding window: oldest frame first, newest 8 frames written at the end. */
-  private mel = new Float32Array(EMBEDDING_MEL_FRAMES * MEL_BINS)
-  private melFrames = 0
-
+  /** Oldest sample first, stored at int16 scale so we can probe normalized vs raw at runtime. */
+  private pcm = new Float32Array(WINDOW_SAMPLES)
+  private pcmFilled = 0
+  /** Copy taken before inference so a later append cannot mutate the in-flight window. */
+  private pcmSnapshot = new Float32Array(WINDOW_SAMPLES)
+  private scaledPcm = new Float32Array(WINDOW_SAMPLES)
+  /** Reused so the 16 embedding windows are not allocated twelve times a second. */
+  private embeddingWindows = new Float32Array(
+    CLASSIFIER_EMBEDDINGS * EMBEDDING_MEL_FRAMES * MEL_BINS
+  )
   private features = new Float32Array(CLASSIFIER_EMBEDDINGS * EMBEDDING_SIZE)
-  private embeddingCount = 0
 
-  private consecutive = 0
   private mutedUntil = 0
   private threshold = DEFAULT_THRESHOLD
   private listening = false
   private busy = false
   private onDetected: (() => void) | null = null
+  private sawFrame = false
+  private lastScoreLog = 0
+  private consecutive = 0
+  /** Divide int16 samples by this before the mel model. 32768 = livekit [-1, 1]; 1 = openWakeWord. */
+  private pcmDivisor = 32768
+  private probedScale = false
 
   private modelDir(): string {
     // Under resources in a packaged app: shipped with the code, not user state, so it is fine for
@@ -137,8 +149,8 @@ export class WakeWordDetector {
 
     setHealth('wakeWord', 'connecting')
     try {
-      // Imported lazily: onnxruntime loads a large native library, and a user who never gets a
-      // trained model should not pay that cost on every launch.
+      // Imported lazily: onnxruntime loads a large native library, and a machine that is missing
+      // the fetched feature models should not pay that cost on every launch.
       const ort = await import('onnxruntime-node')
       this.TensorCtor = ort.Tensor
       const dir = this.modelDir()
@@ -187,12 +199,9 @@ export class WakeWordDetector {
   }
 
   private reset(): void {
-    this.rawFilled = 0
-    this.raw.fill(0)
-    this.mel.fill(0)
-    this.melFrames = 0
-    this.features.fill(0)
-    this.embeddingCount = 0
+    this.pcm.fill(0)
+    this.pcmFilled = 0
+    this.sawFrame = false
     this.consecutive = 0
   }
 
@@ -203,37 +212,46 @@ export class WakeWordDetector {
   }
 
   /**
-   * One 80 ms chunk of int16 PCM. Values are fed to the model at int16 scale, not normalized to
-   * [-1, 1]: openWakeWord was trained that way, and normalizing shifts every mel bin by about
-   * 20 dB, which silently prevents the classifier from ever firing.
+   * One 80 ms chunk of int16 PCM. Stored at int16 scale; divided by `pcmDivisor` before the mel
+   * model (32768 for livekit [-1, 1], or 1 if a runtime probe finds int16 scores higher).
    */
   async push(pcm: ArrayBuffer): Promise<void> {
     if (!this.listening || !this.sessions) return
-    if (this.busy) {
-      // Inference is ~2 ms against an 80 ms budget, so this is rare; when it does happen the chunk
-      // is dropped rather than queued. Dropping leaves a seam in the buffers, so the streak is
-      // cleared: a spliced pair of half-words must not be able to complete an activation.
-      this.consecutive = 0
+
+    const samples = pcm16FromIpc(pcm)
+    if (!samples) {
+      if (!this.sawFrame) {
+        const byteLength = ArrayBuffer.isView(pcm) ? pcm.byteLength : pcm.byteLength
+        log.warn(
+          `wake frame dropped: got ${byteLength} bytes (${Object.prototype.toString.call(pcm)}), ` +
+            `expected ${CAPTURE_FRAME_SAMPLES * 2}`
+        )
+        this.sawFrame = true
+      }
       return
     }
-    if (Date.now() < this.mutedUntil) return
 
-    const samples = new Int16Array(pcm)
-    if (samples.length !== CAPTURE_FRAME_SAMPLES) return
+    if (!this.sawFrame) {
+      this.sawFrame = true
+      log.info('wake word receiving microphone frames')
+    }
+
+    const wasShort = this.pcmFilled < WINDOW_SAMPLES
+    this.append(samples)
+    if (wasShort && this.pcmFilled >= WINDOW_SAMPLES) {
+      log.info('wake word window primed, scoring speech')
+    }
+    if (this.pcmFilled < WINDOW_SAMPLES) return
+    if (Date.now() < this.mutedUntil) return
+    if (this.busy) return
 
     let sumSquares = 0
     for (const sample of samples) sumSquares += sample * sample
-    if (Math.sqrt(sumSquares / samples.length) < SILENCE_RMS) {
-      // Silence still has to advance the buffers, or the frames either side of a quiet gap would
-      // be spliced together into a word that was never said.
-      this.consecutive = 0
-      this.shiftRaw(samples)
-      return
-    }
+    if (Math.sqrt(sumSquares / samples.length) < SILENCE_RMS) return
 
     this.busy = true
     try {
-      await this.process(samples)
+      await this.process(Math.sqrt(sumSquares / samples.length))
     } catch (error) {
       log.warn('wake word inference failed', error)
     } finally {
@@ -241,55 +259,73 @@ export class WakeWordDetector {
     }
   }
 
-  /**
-   * The mel model needs the 480 samples immediately before the current chunk, which are the last
-   * 480 of the previous one. So the buffer is [previous tail | current chunk], shifted each time.
-   */
-  private shiftRaw(samples: Int16Array): void {
-    this.raw.copyWithin(0, CAPTURE_FRAME_SAMPLES)
+  private append(samples: Int16Array): void {
+    this.pcm.copyWithin(0, CAPTURE_FRAME_SAMPLES)
+    const tail = WINDOW_SAMPLES - CAPTURE_FRAME_SAMPLES
     for (let i = 0; i < samples.length; i += 1) {
-      this.raw[MEL_OVERLAP_SAMPLES + i] = samples[i]
+      this.pcm[tail + i] = samples[i]
     }
-    this.rawFilled = Math.min(this.rawFilled + samples.length, this.raw.length)
+    this.pcmFilled = Math.min(this.pcmFilled + samples.length, WINDOW_SAMPLES)
   }
 
-  private async process(samples: Int16Array): Promise<void> {
-    const { mel, embedding, classifier } = this.sessions!
-    const Tensor = this.TensorCtor!
+  private async process(rms: number): Promise<void> {
+    this.pcmSnapshot.set(this.pcm)
 
-    this.shiftRaw(samples)
-    // Until the overlap holds real audio, the leading frames would be computed against zeros.
-    // Skipping one chunk at startup is cheaper than a spurious activation.
-    if (this.rawFilled < this.raw.length) return
-
-    const melOut = await mel.run({
-      input: new Tensor('float32', this.raw, [1, this.raw.length])
-    })
-    const melData = melOut[mel.outputNames[0]].data as Float32Array
-    if (melData.length !== MEL_FRAMES_PER_CHUNK * MEL_BINS) {
-      log.warn(`unexpected mel size ${melData.length}; wake word disabled`)
-      this.listening = false
+    if (!this.probedScale && rms >= 500) {
+      this.probedScale = true
+      const normalized = await this.score(this.pcmSnapshot, 32768)
+      const int16 = await this.score(this.pcmSnapshot, 1)
+      this.pcmDivisor = int16 > normalized ? 1 : 32768
+      log.info(
+        `wake scale probe: normalized=${normalized.toFixed(3)} int16=${int16.toFixed(3)}; ` +
+          `using ${this.pcmDivisor === 1 ? 'int16' : 'normalized'}`
+      )
+      this.finishScore(Math.max(normalized, int16))
       return
     }
 
-    // Shift out the oldest 8 frames and append the new ones, applying openWakeWord's scaling —
-    // without which the embedding model sees values it was never trained on.
-    this.mel.copyWithin(0, MEL_FRAMES_PER_CHUNK * MEL_BINS)
-    const tail = this.mel.length - MEL_FRAMES_PER_CHUNK * MEL_BINS
-    for (let i = 0; i < melData.length; i += 1) this.mel[tail + i] = melData[i] / 10 + 2
+    const score = await this.score(this.pcmSnapshot, this.pcmDivisor)
+    this.finishScore(score)
+  }
 
-    this.melFrames = Math.min(this.melFrames + MEL_FRAMES_PER_CHUNK, EMBEDDING_MEL_FRAMES)
-    if (this.melFrames < EMBEDDING_MEL_FRAMES) return
+  private scaleInto(source: Float32Array, divisor: number): Float32Array {
+    if (divisor === 1) return source
+    for (let i = 0; i < source.length; i += 1) this.scaledPcm[i] = source[i] / divisor
+    return this.scaledPcm
+  }
+
+  private async score(audio: Float32Array, divisor: number): Promise<number> {
+    const { mel, embedding, classifier } = this.sessions!
+    const Tensor = this.TensorCtor!
+    const input = this.scaleInto(audio, divisor)
+
+    const melOut = await mel.run({
+      input: new Tensor('float32', input, [1, input.length])
+    })
+    const melData = melOut[mel.outputNames[0]].data as Float32Array
+    const melFrames = melData.length / MEL_BINS
+    const nWindows = Math.floor((melFrames - EMBEDDING_MEL_FRAMES) / EMBEDDING_STRIDE) + 1
+    if (nWindows < CLASSIFIER_EMBEDDINGS) return 0
+
+    const firstWindow = nWindows - CLASSIFIER_EMBEDDINGS
+    const windowBins = EMBEDDING_MEL_FRAMES * MEL_BINS
+    for (let w = 0; w < CLASSIFIER_EMBEDDINGS; w += 1) {
+      const src = (firstWindow + w) * EMBEDDING_STRIDE * MEL_BINS
+      const dst = w * windowBins
+      for (let i = 0; i < windowBins; i += 1) {
+        this.embeddingWindows[dst + i] = melData[src + i] / 10 + 2
+      }
+    }
 
     const embOut = await embedding.run({
-      input_1: new Tensor('float32', this.mel, [1, EMBEDDING_MEL_FRAMES, MEL_BINS, 1])
+      input_1: new Tensor('float32', this.embeddingWindows, [
+        CLASSIFIER_EMBEDDINGS,
+        EMBEDDING_MEL_FRAMES,
+        MEL_BINS,
+        1
+      ])
     })
-    const vector = embOut[embedding.outputNames[0]].data as Float32Array
-
-    this.features.copyWithin(0, EMBEDDING_SIZE)
-    this.features.set(vector, this.features.length - EMBEDDING_SIZE)
-    this.embeddingCount = Math.min(this.embeddingCount + 1, CLASSIFIER_EMBEDDINGS)
-    if (this.embeddingCount < CLASSIFIER_EMBEDDINGS) return
+    this.features.set(embOut[embedding.outputNames[0]].data as Float32Array)
 
     const scoreOut = await classifier.run({
       [classifier.inputNames[0]]: new Tensor('float32', this.features, [
@@ -298,7 +334,14 @@ export class WakeWordDetector {
         EMBEDDING_SIZE
       ])
     })
-    const score = (scoreOut[classifier.outputNames[0]].data as Float32Array)[0]
+    return (scoreOut[classifier.outputNames[0]].data as Float32Array)[0]
+  }
+
+  private finishScore(score: number): void {
+    if (score >= 0.1 && Date.now() - this.lastScoreLog > 500) {
+      this.lastScoreLog = Date.now()
+      log.info(`wake score ${score.toFixed(3)} (threshold ${this.threshold})`)
+    }
 
     if (score < this.threshold) {
       this.consecutive = 0
@@ -311,9 +354,6 @@ export class WakeWordDetector {
     log.info(`wake word detected (score ${score.toFixed(3)})`)
     this.consecutive = 0
     this.mute()
-    // Cleared so the same utterance cannot contribute to a second activation.
-    this.features.fill(0)
-    this.embeddingCount = 0
     this.onDetected?.()
   }
 }

@@ -6,7 +6,7 @@
 export const INPUT_SAMPLE_RATE = 16_000
 export const OUTPUT_SAMPLE_RATE = 24_000
 
-/** 1280 samples at 16 kHz is 80 ms, the frame size both Gemini Live and openWakeWord expect. */
+/** 1280 samples at 16 kHz is 80 ms, the frame size both Gemini Live and the wake word detector expect. */
 export const CAPTURE_FRAME_SAMPLES = 1280
 
 export const INPUT_MIME_TYPE = `audio/pcm;rate=${INPUT_SAMPLE_RATE}`

@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /**
- * Downloads the two shared openWakeWord feature models into `models/`.
+ * Downloads the two shared wake word feature models into `models/`.
  *
  * These are generic and identical for every wake word: a melspectrogram front end and a speech
- * embedding model. The third model — the small classifier that actually recognises "hey iris" —
- * cannot be downloaded, because it does not exist until it is trained. See the notes printed at
- * the end for how to produce it.
+ * embedding model, the same frozen extractors livekit-wakeword uses. The third model — the
+ * classifier that actually recognises "hey iris" — is trained separately and committed as
+ * `models/iris.onnx`.
  *
- * They are fetched rather than committed so the repository stays free of binaries, and IRIS runs
- * perfectly well without them: the wake word is simply unavailable and the hotkey is used instead.
+ * The feature models are fetched rather than committed so the repository stays free of large
+ * binaries. IRIS runs without them: the wake word is simply unavailable and the hotkey is used
+ * instead.
  */
 import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync, existsSync, statSync } from 'node:fs'
@@ -16,7 +17,7 @@ import path from 'node:path'
 
 const RELEASE = 'https://github.com/dscripka/openWakeWord/releases/download/v0.5.1'
 const FILES = ['melspectrogram.onnx', 'embedding_model.onnx']
-const CLASSIFIER = 'hey_iris.onnx'
+const CLASSIFIER = 'iris.onnx'
 
 const root = path.resolve(import.meta.dirname, '..')
 const outDir = path.join(root, 'models')
@@ -50,12 +51,9 @@ if (existsSync(path.join(outDir, CLASSIFIER))) {
       '',
       `${CLASSIFIER} is missing, so "hey iris" is inactive and the hotkey is the way to wake IRIS.`,
       '',
-      'To produce it, run openWakeWord\'s automatic training notebook in Google Colab with the',
-      'target phrase "hey iris". Training is Linux-only, and the notebook\'s pinned dependencies',
-      'have gone stale since its last release in February 2024, so budget time for fixing the',
-      'environment before any training starts.',
-      '',
-      `Rename the resulting .onnx model to ${CLASSIFIER} and put it in models/.`,
+      'To produce it, train with livekit-wakeword (https://github.com/livekit/livekit-wakeword)',
+      'using the target phrase "hey iris", then put the exported ONNX classifier at',
+      `models/${CLASSIFIER}.`,
       '',
       'Two things matter more than accuracy on a held-out set:',
       '  - Tune for a low false-accept rate, not a low false-reject rate. A missed wake word costs',
