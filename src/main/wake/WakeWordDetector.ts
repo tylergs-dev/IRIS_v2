@@ -39,9 +39,9 @@ const EMBEDDING_SIZE = 96
 /**
  * This classifier's observed scores on-device: room silence ~0.02, a spoken "hey iris" ~0.21–0.32.
  * livekit-wakeword's 0.6 default is for their highly confident "hey livekit" head and would never
- * fire here. 0.13 sits in the gap. Two consecutive 80 ms frames avoid a single noise blip.
+ * fire here. 0.12 sits in the gap. Two consecutive 80 ms frames avoid a single noise blip.
  */
-const DEFAULT_THRESHOLD = 0.13
+const DEFAULT_THRESHOLD = 0.12
 /** Consecutive chunks over threshold. At 80 ms each, two is 160 ms of agreement. */
 const REQUIRED_CONSECUTIVE = 2
 /** After firing, ignore audio for long enough that one utterance cannot trigger twice. */
