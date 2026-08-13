@@ -1,2 +1,4 @@
 - Goodbye sign off skipping / cutting early
 - Web browse not working?
+- Gmail Mode mode pulling correct emails from inbox
+- 
