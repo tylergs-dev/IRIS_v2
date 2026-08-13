@@ -14,7 +14,13 @@ export const INPUT_MIME_TYPE = `audio/pcm;rate=${INPUT_SAMPLE_RATE}`
 /** Playback waterline. Higher trades latency for resilience to network jitter. */
 export const PLAYBACK_PREBUFFER_SECONDS = 0.15
 
-export const PLAYBACK_RING_SECONDS = 10
+/**
+ * Gemini Live often bursts a whole reply at 3–4× realtime. Occupancy is then
+ * duration × (1 − 1/burst), so a 20 s answer needs ~15 s of buffer — 10 s was only
+ * enough for jitter and dropped the start of the sentence. 120 s holds ~160 s of
+ * speech at 4×, which covers long email readings.
+ */
+export const PLAYBACK_RING_SECONDS = 120
 
 /**
  * Worklet port messages. A `MessagePort` is typed as carrying `any`, so without these the whole

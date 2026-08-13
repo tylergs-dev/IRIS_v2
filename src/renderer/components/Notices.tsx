@@ -4,8 +4,8 @@ import { dismissNotice, useStore } from '../store'
 export function Notices(): React.JSX.Element {
   const notices = useStore((state) => state.notices)
 
-  // Only what IRIS could not say itself. When voice is working it has already said these, and
-  // announcing them again would put the screen reader on top of IRIS mid-sentence.
+  // Only what IRIS could not say itself. Shown on screen for a helper; a live region is kept for
+  // anyone using a screen reader on this window, but the daily user is not expected to have one.
   const undelivered = notices
     .filter((notice) => !notice.spoken)
     .map((notice) => notice.text)
@@ -14,10 +14,9 @@ export function Notices(): React.JSX.Element {
   return (
     <>
       {/*
-        Mounted from startup and left mounted, even with nothing to say. A live region that appears
-        in the DOM with text already inside it is frequently not announced at all — the change has
-        to happen to a region the screen reader is already watching. Since this is the path for
-        messages IRIS could not speak, failing to announce would mean losing them entirely.
+        Mounted from startup and left mounted. Harmless if nobody is running a screen reader;
+        useful if a helper is. Spoken notices are filtered out above so IRIS and a screen reader
+        never talk over each other.
       */}
       <LiveRegion text={undelivered} assertive />
 

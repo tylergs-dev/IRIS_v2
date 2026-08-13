@@ -28,7 +28,7 @@ function fail(message) {
 if (process.platform !== 'win32') {
   fail(
     'Windows only. electron-builder cannot produce a Windows binary from this platform, and vpk ' +
-      'needs the Windows toolchain to sign and build the bootstrapper.'
+      'needs the Windows toolchain to build the bootstrapper.'
   )
 }
 
@@ -70,10 +70,10 @@ const args = [
 ]
 
 /**
- * Signing is an accessibility requirement, not polish: without it SmartScreen interposes a
- * "More info -> Run anyway" flow that cannot be completed without sight. Passing the config to vpk
- * rather than only to electron-builder matters because Velopack ships its own bootstrap binaries,
- * which need signing too.
+ * Unsigned is the intended default. First install is done with a sighted helper, who clicks
+ * through SmartScreen once. Later Velopack updates replace files inside the install directory and
+ * do not hit that dialog. Signing remains optional if a certificate later exists: pass it to vpk
+ * rather than only to electron-builder, because Velopack ships its own bootstrap binaries.
  */
 if (process.env.IRIS_AZURE_SIGN_FILE) {
   if (!existsSync(process.env.IRIS_AZURE_SIGN_FILE)) {
@@ -82,8 +82,8 @@ if (process.env.IRIS_AZURE_SIGN_FILE) {
   args.push('--azureTrustedSignFile', process.env.IRIS_AZURE_SIGN_FILE)
 } else {
   console.warn(
-    '\nWARNING: building unsigned. Windows SmartScreen will warn on first run, and a blind user ' +
-      'cannot navigate that dialog. Set IRIS_AZURE_SIGN_FILE for a release build.\n'
+    '\nBuilding unsigned (expected). SmartScreen will warn once on first install; a helper ' +
+      'clicks through it. Set IRIS_AZURE_SIGN_FILE only if you want a signed build.\n'
   )
 }
 
@@ -96,12 +96,13 @@ console.log(
     '',
     `Done. ${OUT_DIR} now holds the installer, the .nupkg, and releases.win.json.`,
     '',
-    'To publish: upload the whole directory to an HTTPS host and point IRIS_UPDATE_FEED at it',
-    'at build time. Plain HTTP is not an option — applying an update is code execution.',
+    'To publish: upload the whole directory to the HTTPS folder that IRIS_UPDATE_FEED already',
+    'pointed at during this build. Plain HTTP is not an option — applying an update is code',
+    'execution. Code signing is not required for updates to work.',
     '',
-    'Then verify from a clean Windows VM, not the build machine:',
-    '  1. Install from the Setup exe and confirm IRIS starts and speaks.',
-    '  2. Bump the version, repackage, upload, and relaunch the installed copy.',
+    'Then verify from a clean Windows machine, not the build machine:',
+    '  1. Install from the Setup exe (helper clicks through SmartScreen) and confirm IRIS speaks.',
+    '  2. Bump the version, repackage with the same IRIS_UPDATE_FEED, upload, and relaunch.',
     '  3. Confirm the update is found, downloaded, and offered out loud.',
     '',
     'If the check fails with "invalid peer certificate: UnknownIssuer", that is a real TLS',

@@ -110,9 +110,9 @@ export function App(): React.JSX.Element {
         <Notices />
 
         {/*
-          The one thing a screen reader should announce that IRIS does not say out loud: which of
-          the four states it is in. Debounced, because waking runs through three of them inside a
-          second and only where it settles is worth hearing.
+          Voice state, for anyone using a screen reader on the helper window. Debounced, because
+          waking runs through three states inside a second and only where it settles is worth
+          hearing. The daily user hears IRIS, not this.
         */}
         <LiveRegion text={settledState ? `IRIS is ${settledState.toLowerCase()}` : ''} />
 

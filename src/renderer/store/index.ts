@@ -18,7 +18,7 @@ export interface Notice {
   id: number
   severity: 'info' | 'warning' | 'error'
   text: string
-  /** Whether IRIS said it aloud. If not, the screen reader has to, or it is never heard. */
+  /** Whether IRIS said it aloud. If not, only a helper looking at the window will see it. */
   spoken: boolean
 }
 

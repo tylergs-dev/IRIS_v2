@@ -54,11 +54,12 @@ class PlayerProcessor extends AudioWorkletProcessor {
   private push(samples: Float32Array): void {
     const capacity = this.ring.length
     for (let i = 0; i < samples.length; i += 1) {
+      // Full: drop incoming rather than the queued start of the sentence. Skipping the
+      // beginning is heard as speeding through the reply.
+      if (this.write - this.read >= capacity) break
       this.ring[this.write % capacity] = samples[i]
       this.write += 1
     }
-    // Overflow means playback stalled while audio kept arriving; keep the newest audio.
-    if (this.write - this.read > capacity) this.read = this.write - capacity
   }
 
   override process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {

@@ -13,13 +13,12 @@ const log = createLogger('settings')
 /**
  * The spoken half of the Settings screen.
  *
- * Everything reachable by clicking has to be reachable by asking, because the user cannot click.
- * These exist because an audit of the window found actions that had no spoken equivalent at all —
- * most seriously connecting Gmail, which would have meant a blind user living alone could never
- * finish setting up the one thing IRIS is mainly for.
+ * Everything reachable by clicking has to be reachable by asking, because the daily user cannot
+ * click. These exist because an audit of the window found actions that had no spoken equivalent
+ * at all — most seriously connecting Gmail.
  *
- * The two API keys are the deliberate exception. They are long random strings that cannot be
- * dictated reliably, and IRIS cannot read one out without saying a credential aloud in a room.
+ * The two API keys, and Google's OAuth consent screens, are helper work. They cannot be dictated
+ * reliably, IRIS will not read a credential aloud in a room, and the consent page needs sight.
  */
 export function registerSettingsTools(): void {
   registerTool({
@@ -68,10 +67,10 @@ export function registerSettingsTools(): void {
       return {
         started: true,
         note:
-          'Tell them their web browser is opening so they can sign in to Google there, that their ' +
-          'screen reader and password manager will work normally in it, and that Google shows a ' +
-          '"has not verified this app" warning once — they should choose Advanced and continue. ' +
-          'Say you will confirm when it is done, then wait quietly.'
+          'Tell them their web browser is opening for Google sign-in. This part needs whoever ' +
+          'helped install IRIS — Google shows a "has not verified this app" warning once, and they ' +
+          'should choose Advanced and continue. Say you will confirm when it is done, then wait ' +
+          'quietly.'
       }
     }
   })

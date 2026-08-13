@@ -13,7 +13,7 @@ const log = createLogger('oauth')
  */
 export const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
 
-/** Long enough for a screen-reader user to work through Google's consent screens unhurried. */
+/** Long enough for a helper to work through Google's consent screens unhurried. */
 const FLOW_TIMEOUT_MS = 10 * 60 * 1000
 
 export class MissingOAuthClientError extends Error {
@@ -43,8 +43,7 @@ export async function createOAuthClient(redirectUri?: string): Promise<OAuth2Cli
 }
 
 function landingPage(heading: string, detail: string): string {
-  // Rendered in the user's own browser, so it must stand on its own for a screen reader. The
-  // role="status" heading is announced without the user having to hunt for it.
+  // Rendered in the system browser for whoever is completing Google sign-in (a helper, at setup).
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -75,8 +74,8 @@ export interface AuthResult {
 /**
  * Loopback authorization code flow with PKCE, per RFC 8252. A BrowserWindow cannot be used:
  * Google returns `disallowed_useragent` for OAuth in embedded webviews, and spoofing the user
- * agent is both blocked and against policy. Using the system browser also means the user's own
- * screen reader, password manager, and existing Google session all work normally.
+ * agent is both blocked and against policy. Using the system browser also means a helper's
+ * password manager and existing Google session work normally.
  */
 export async function runGoogleAuthFlow(): Promise<AuthResult> {
   const { clientId, clientSecret } = await clientCredentials()

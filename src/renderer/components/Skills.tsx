@@ -79,9 +79,8 @@ export function Skills(): React.JSX.Element {
             </p>
           ) : null}
           <p className="hint" style={{ marginTop: 10 }}>
-            Sign-in opens in your own web browser so your screen reader and password manager
-            work normally. Google will show a “hasn’t verified this app” notice once — choose
-            Advanced, then continue.
+            Sign-in opens in the system browser. Google will show a “hasn’t verified this app”
+            notice once — choose Advanced, then continue. This is a helper step, like the API keys.
           </p>
         </section>
 

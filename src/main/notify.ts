@@ -22,8 +22,8 @@ const lastSpoken = new Map<string, number>()
 
 export interface NoticeOptions {
   /**
-   * Set for text IRIS has already said, or is about to say, in its own voice. Keeps the screen
-   * reader from reading a second copy over the top of it.
+   * Set for text IRIS has already said, or is about to say, in its own voice. Avoids a second
+   * copy of the same sentence being queued if a helper's screen reader is running.
    */
   alreadySpoken?: boolean
   /** Skips speaking, for notices that would be noise out loud. Rare, and worth justifying. */
@@ -32,13 +32,12 @@ export interface NoticeOptions {
 
 /**
  * The single path for telling the user something went wrong. Every notice must reach them by ear,
- * because the intended user cannot see the screen at all — a warning that is only drawn has not
- * been delivered.
+ * because the intended user cannot see the screen and does not run a screen reader — a warning
+ * that is only drawn has not been delivered.
  *
- * There are two ways to be heard, and which one applies depends on what is broken:
- *   - IRIS says it, when the voice session is up. This is the good case and it sounds like IRIS.
- *   - The screen reader says it, when voice is down — which is when most notices happen. The
- *     renderer puts undelivered text in an assertive live region for exactly this reason.
+ * IRIS says it when the voice session is up. That is the only path that reaches the daily user.
+ * When voice is down, the window still shows the notice for a sighted helper; there is no
+ * screen-reader fallback.
  */
 export function notice(
   severity: 'info' | 'warning' | 'error',
