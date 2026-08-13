@@ -12,7 +12,7 @@ export const EXTRACT_READABLE_TEXT = `(() => {
   const clone = document.body.cloneNode(true);
   const strip = [
     'script', 'style', 'noscript', 'nav', 'header', 'footer', 'aside', 'form', 'iframe',
-    'svg', 'button', '[aria-hidden="true"]', '[role="navigation"]', '[role="banner"]',
+    'svg', 'button', '[role="navigation"]', '[role="banner"]',
     '[role="complementary"]', '[role="search"]', '[hidden]'
   ];
   for (const selector of strip) {
@@ -20,5 +20,14 @@ export const EXTRACT_READABLE_TEXT = `(() => {
   }
   // Prefer the semantic content region; fall back to the whole body when a page has none.
   const main = clone.querySelector('main, article, [role="main"]') || clone;
+  return (main.textContent || '').replace(/\\s+/g, ' ').trim();
+})()`
+
+/**
+ * Cookie and login walls set aria-hidden on the whole app. After stripping chrome, that can leave
+ * nothing. This keeps the article even when a modal is sitting on top of it.
+ */
+export const EXTRACT_LOOSE_TEXT = `(() => {
+  const main = document.querySelector('article, main, [role="main"]') || document.body;
   return (main.textContent || '').replace(/\\s+/g, ' ').trim();
 })()`

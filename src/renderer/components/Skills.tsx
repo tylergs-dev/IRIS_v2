@@ -9,6 +9,8 @@ export function Skills(): React.JSX.Element {
   const wakeOk = useStore((state) => state.health.wakeWord) === 'online'
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [signingIn, setSigningIn] = useState(false)
+  const [signInError, setSignInError] = useState<string | null>(null)
 
   useEffect(() => {
     window.iris
@@ -31,6 +33,18 @@ export function Skills(): React.JSX.Element {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setConnecting(false)
+    }
+  }
+
+  async function openWebsiteSignIn(): Promise<void> {
+    setSigningIn(true)
+    setSignInError(null)
+    try {
+      await window.iris.invoke('browse:signIn')
+    } catch (cause) {
+      setSignInError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setSigningIn(false)
     }
   }
 
@@ -104,6 +118,27 @@ export function Skills(): React.JSX.Element {
           <p>
             For anything a single search can’t answer, IRIS drives a real browser and narrates
             every page it visits and every button it presses before pressing it.
+          </p>
+          <p>
+            That browser is separate from yours. Subscriber newsletters (Morningstar, Kiplinger,
+            and the rest) will look unsigned-in until a helper logs in here. Those sign-ins are
+            remembered.
+          </p>
+          <button
+            className="btn btn-primary"
+            onClick={() => void openWebsiteSignIn()}
+            disabled={signingIn}
+          >
+            {signingIn ? 'Opening browser…' : 'Sign into websites'}
+          </button>
+          {signInError ? (
+            <p className="hint" style={{ color: 'var(--danger)', marginTop: 10 }}>
+              {signInError}
+            </p>
+          ) : null}
+          <p className="hint" style={{ marginTop: 10 }}>
+            Opens IRIS’s browser at Morningstar. Sign into any other subscriber site from there,
+            then close the window. This is a helper step, like Gmail.
           </p>
           {browserOk ? null : (
             <p className="hint">

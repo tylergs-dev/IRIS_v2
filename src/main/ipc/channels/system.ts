@@ -2,6 +2,7 @@ import { shell } from 'electron'
 import { getHistory } from '../../chat/log'
 import { getHealth } from '../../health'
 import { onboarding } from '../../onboarding/OnboardingMachine'
+import { browser } from '../../skills/browse/BrowserService'
 import { emit, handle } from '../register'
 import {
   clearSecret,
@@ -27,6 +28,10 @@ export function registerSystemChannels(): void {
 
   handle('onboarding:start', async () => {
     await onboarding.start()
+  })
+
+  handle('browse:signIn', async (url) => {
+    await browser.openSignInSession(url)
   })
 
   handle('keys:presence', () => secretsPresence())

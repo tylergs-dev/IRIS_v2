@@ -100,24 +100,112 @@ export function htmlToSpeakableText(html: string): string {
   })
 }
 
+const CTA_TITLES = new Set([
+  'read more',
+  'click here',
+  'learn more',
+  'continue reading',
+  'see more',
+  'find out more',
+  'read the story',
+  'full story',
+  'more'
+])
+
 export function extractLinks(html: string): EmailLink[] {
   const $ = cheerio.load(html)
+  const markers = collectMarkers($)
   const links: EmailLink[] = []
   const seen = new Set<string>()
+  const usedHeadlines = new Set<string>()
 
-  $('a[href]').each((_index, element) => {
-    const href = ($(element).attr('href') ?? '').trim()
-    if (!/^https?:\/\//i.test(href)) return
-    if (seen.has(href)) return
-    seen.add(href)
+  for (let i = 0; i < markers.length; i++) {
+    const marker = markers[i]
+    if (marker.kind !== 'link') continue
+    if (seen.has(marker.href)) continue
+    seen.add(marker.href)
 
-    const text = $(element).text().replace(/\s+/g, ' ').trim()
-    // An image-only or empty anchor has no title to announce, so fall back to the image's alt.
-    const alt = ($(element).find('img[alt]').first().attr('alt') ?? '').trim()
-    links.push({ text: text || alt, href })
-  })
+    let text = marker.text
+    if (!isHeadline(text)) {
+      text = nearbyHeadline(markers, i, usedHeadlines) ?? text
+    }
+
+    links.push({ text, href: marker.href })
+  }
 
   return links
+}
+
+type Marker = { kind: 'link'; href: string; text: string } | { kind: 'headline'; text: string }
+
+function collectMarkers($: cheerio.CheerioAPI): Marker[] {
+  const markers: Marker[] = []
+  $('a[href], h1, h2, h3, h4, p, span, td, strong, b, font, div').each((_index, element) => {
+    const node = $(element)
+    if (node.is('a')) {
+      const href = (node.attr('href') ?? '').trim()
+      if (!/^https?:\/\//i.test(href)) return
+      markers.push({ kind: 'link', href, text: titleFromOwnAnchor(node) })
+      return
+    }
+    if (node.closest('a').length) return
+    if (node.find('a, h1, h2, h3, h4, p, table, div').length) return
+    const text = collapseSpace(node.text())
+    if (isHeadline(text)) markers.push({ kind: 'headline', text })
+  })
+  return markers
+}
+
+function titleFromOwnAnchor(node: cheerio.Cheerio<cheerio.Element>): string {
+  const own = collapseSpace(node.text())
+  if (isHeadline(own)) return own
+  const img = node.find('img').first()
+  for (const candidate of [img.attr('alt'), img.attr('title'), node.attr('aria-label'), node.attr('title')]) {
+    const value = collapseSpace(candidate ?? '')
+    if (isHeadline(value)) return value
+  }
+  return own
+}
+
+function nearbyHeadline(
+  markers: Marker[],
+  linkIndex: number,
+  usedHeadlines: Set<string>
+): string | null {
+  for (let j = linkIndex + 1; j < markers.length; j++) {
+    const next = markers[j]
+    if (next.kind === 'link' && isHeadline(next.text)) break
+    if (next.kind === 'headline') {
+      const key = next.text.toLowerCase()
+      if (usedHeadlines.has(key)) continue
+      usedHeadlines.add(key)
+      return next.text
+    }
+  }
+  for (let j = linkIndex - 1; j >= 0; j--) {
+    const prev = markers[j]
+    if (prev.kind === 'link' && isHeadline(prev.text)) break
+    if (prev.kind === 'headline') {
+      const key = prev.text.toLowerCase()
+      if (usedHeadlines.has(key)) continue
+      usedHeadlines.add(key)
+      return prev.text
+    }
+  }
+  return null
+}
+
+function isHeadline(text: string): boolean {
+  const value = collapseSpace(text)
+  if (value.length < 12 || value.length > 160) return false
+  if (CTA_TITLES.has(value.toLowerCase())) return false
+  if (value.split(' ').filter(Boolean).length < 3) return false
+  if ((value.match(/[.!?]/g) ?? []).length > 1) return false
+  return /[a-zA-Z]/.test(value)
+}
+
+function collapseSpace(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
 }
 
 /** Collapses the runaway blank lines and separator bars that newsletters are full of. */

@@ -1,4 +1,9 @@
-import type { SpeechPace, SummaryLength, UserProfile } from '../../shared/types'
+import {
+  DEFAULT_DIGEST_SENDERS,
+  type SpeechPace,
+  type SummaryLength,
+  type UserProfile
+} from '../../shared/types'
 import { DEFAULT_VOICE, type VoiceName } from '../../shared/voices'
 import { JsonStore } from './json-store'
 
@@ -12,24 +17,44 @@ const defaults: UserProfile = {
   voiceName: DEFAULT_VOICE,
   speechPace: 'normal',
   summaryLength: 'short',
-  digestSenders: [],
+  digestSenders: [...DEFAULT_DIGEST_SENDERS],
   nonDigestSenders: [],
-  autoDetectDigests: true,
+  autoDetectDigests: false,
+  articleReviewListSeeded: false,
   interests: [],
   notes: null,
   knownLabels: []
 }
 
 let store: JsonStore<UserProfile> | null = null
+const listeners = new Set<(profile: UserProfile) => void>()
+const voiceListeners = new Set<(voice: VoiceName) => void>()
 
 /** Constructed lazily because it resolves its path from `app.getPath('userData')`. */
 function getStore(): JsonStore<UserProfile> {
-  store ??= new JsonStore('profile', defaults)
+  if (store) return store
+  store = new JsonStore('profile', defaults)
+  seedArticleReviewListIfNeeded()
   return store
 }
 
-const listeners = new Set<(profile: UserProfile) => void>()
-const voiceListeners = new Set<(voice: VoiceName) => void>()
+/**
+ * Saved profiles still have an empty list and auto-detect on. Write the built-in publications
+ * once; after that an empty list means the user removed everyone.
+ */
+function seedArticleReviewListIfNeeded(): void {
+  if (!store) return
+  const profile = store.get()
+  if (profile.articleReviewListSeeded) return
+
+  const patch: Partial<UserProfile> = { articleReviewListSeeded: true }
+  if (profile.digestSenders.length === 0) {
+    patch.digestSenders = [...DEFAULT_DIGEST_SENDERS]
+    patch.autoDetectDigests = false
+  }
+  const next = store.set(patch)
+  for (const listener of listeners) listener(next)
+}
 
 export function getProfile(): UserProfile {
   return getStore().get()

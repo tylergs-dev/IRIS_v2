@@ -30,6 +30,7 @@ export function nextActionPrompt(goal: string, url: string, snapshot: string, hi
     '- Never accept cookie banners by clicking "reject all" if that reloads the page; prefer',
     '  "accept" so the task can proceed.',
     '- Choose "give_up" for anything needing a login, a payment, a captcha, or a personal detail.',
+    '  Do not try to sign in yourself. A helper can sign into subscriber sites separately.',
     '- Never enter a password, a card number, an address, or any personal information.',
     '- "why" must be a short phrase in plain language, suitable to be read aloud.'
   ]
@@ -44,7 +45,7 @@ export function pageAnswerPrompt(goal: string, url: string, text: string): strin
     '',
     'Three or four sentences of plain spoken prose. No markdown, no lists, no URLs. If the page',
     'does not actually answer the question, say so plainly rather than guessing. If it is a',
-    'paywall, a login wall, or an error page, say only that.',
+    'paywall or login wall, say that and mention a helper can sign into that site in your browser.',
     '',
     'Page text:',
     '---',

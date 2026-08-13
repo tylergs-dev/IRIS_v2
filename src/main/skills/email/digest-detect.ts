@@ -1,23 +1,47 @@
 import type { EmailBody, EmailHeader, EmailLink, UserProfile } from '../../../shared/types'
 
-/** Hosts and paths that are never the article itself. */
-const NON_ARTICLE_PATTERNS = [
+/** URL junk: unsubscribe, legal, ads. Not applied to link text — headlines mention "privacy". */
+const NON_ARTICLE_HREF_PATTERNS = [
   /unsubscribe/i,
   /email[-_]?prefs?/i,
-  /preferences/i,
   /manage[-_]?subscription/i,
   /opt[-_]?out/i,
   /view.{0,3}in.{0,3}browser/i,
   /webversion/i,
   /forward.?to.?a.?friend/i,
-  /privacy/i,
-  /terms/i,
-  /\/legal\b/i,
-  /\/contact\b/i,
-  /\/advertise\b/i,
-  /\/sponsor/i,
+  /\/privacy(?:[/?#]|$)/i,
+  /\/terms(?:[/?#]|$)/i,
+  /\/legal(?:[/?#]|$)/i,
+  /\/contact(?:[/?#]|$)/i,
+  /\/advertise(?:[/?#]|$)/i,
+  /\/sponsor(?:[/?#]|$)/i,
   /utm_medium=(ad|sponsor)/i
 ]
+
+/** Footer labels only. A headline like "Privacy Concerns" must not match. */
+const NON_ARTICLE_TEXT_PATTERNS = [
+  /^unsubscribe\b/i,
+  /manage (your )?subscription/i,
+  /view .{0,20}in .{0,10}browser/i,
+  /^view online$/i,
+  /^privacy policy$/i,
+  /^terms of (use|service)$/i,
+  /\badvertise with us\b/i,
+  /\bemail preferences\b/i,
+  /^preferences$/i,
+  /^see all newsletters$/i,
+  /^share your feedback$/i,
+  /start your free trial/i
+]
+
+const ADDRESS_PATTERN =
+  /^\d{1,5}\s+.+\b(rd|st|ave|blvd|dr|ln|way|ct|suite|ste|floor|fl)\b/i
+
+const DATE_TITLE_PATTERN =
+  /^(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day,?\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4}$/i
+
+/** Many click-wrappers share one path; this many hits means the path is not the article. */
+const WRAPPER_PATH_THRESHOLD = 3
 
 const SOCIAL_HOSTS = [
   'facebook.com',
@@ -48,21 +72,20 @@ export interface DigestSignals {
 
 /**
  * Layered cheapest-first so the outcome is explainable and correctable. The sender lists are
- * authoritative because the user has told us directly; heuristics only decide when they are
- * confident, and everything else is escalated to the model by the caller.
+ * authoritative because the user has told us directly — publication names, domains, or addresses.
+ * Heuristics only decide when auto-detect is on, and everything else is escalated to the model.
  */
 export function detectLinkDigest(
   header: EmailHeader,
   body: EmailBody,
   profile: UserProfile
 ): DigestSignals {
-  const sender = header.fromAddress.toLowerCase()
-  const articleLinks = filterArticleLinks(body.links)
+  const articleLinks = filterArticleLinks(body.links, header.fromName)
 
-  if (matchesSender(profile.nonDigestSenders, sender)) {
+  if (matchesSender(profile.nonDigestSenders, header)) {
     return { verdict: 'not-digest', reason: 'the user marked this sender as not a newsletter', articleLinks }
   }
-  if (matchesSender(profile.digestSenders, sender)) {
+  if (matchesSender(profile.digestSenders, header)) {
     return { verdict: 'digest', reason: 'the user marked this sender as a newsletter', articleLinks }
   }
   if (!profile.autoDetectDigests) {
@@ -80,23 +103,32 @@ export function detectLinkDigest(
 
   const hosts = new Set(articleLinks.map(hostOf).filter(Boolean))
   const paths = new Set(articleLinks.map((link) => safeUrl(link.href)?.pathname).filter(Boolean))
+  const titles = new Set(
+    articleLinks.map((link) => collapse(link.text).toLowerCase()).filter((title) => title.length >= 8)
+  )
 
   // A link digest looks like: many links, mostly to distinct pages on one or two hosts, with
-  // little prose of its own between them.
+  // little prose of its own between them. Click-wrappers reuse one path (`/e/er`) for every
+  // article, so unique titles count as distinct pages when the paths do not.
   const concentrated = hosts.size <= 2
-  const distinctPages = paths.size >= articleLinks.length * 0.8
+  const distinctPages =
+    paths.size >= articleLinks.length * 0.8 || titles.size >= articleLinks.length * 0.8
   const linkHeavy = anchorRatio > 0.25
 
-  if (articleLinks.length >= 8 && concentrated && distinctPages && linkHeavy) {
+  if (articleLinks.length >= 5 && distinctPages && concentrated) {
     return {
       verdict: 'digest',
-      reason: `${articleLinks.length} article links to distinct pages with little prose between them`,
+      reason: `${articleLinks.length} distinct article titles from one publication`,
       articleLinks
     }
   }
 
-  if (articleLinks.length >= 5 && distinctPages && (concentrated || linkHeavy)) {
-    return { verdict: 'uncertain', reason: 'several article-shaped links but mixed signals', articleLinks }
+  if (articleLinks.length >= 8 && distinctPages && linkHeavy) {
+    return {
+      verdict: 'uncertain',
+      reason: 'several article-shaped links but mixed signals',
+      articleLinks
+    }
   }
 
   return { verdict: 'not-digest', reason: 'does not look like a list of articles', articleLinks }
@@ -106,47 +138,134 @@ export function detectLinkDigest(
  * Drops anchors that cannot be articles. Runs before any model call so the model never has to
  * reason about unsubscribe footers.
  */
-export function filterArticleLinks(links: EmailLink[]): EmailLink[] {
-  const seen = new Set<string>()
+export function filterArticleLinks(links: EmailLink[], senderName = ''): EmailLink[] {
+  const pathCounts = countPathKeys(links)
+  const seenPaths = new Set<string>()
+  const seenTitles = new Set<string>()
   const result: EmailLink[] = []
+  const sender = senderName.trim().toLowerCase()
 
   for (const link of links) {
     const url = safeUrl(link.href)
-    if (!url) continue
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') continue
+    if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) continue
 
     const host = url.hostname.replace(/^www\./, '')
     if (SOCIAL_HOSTS.some((social) => host === social || host.endsWith(`.${social}`))) continue
     if (STORE_HOSTS.some((store) => host === store)) continue
 
-    if (NON_ARTICLE_PATTERNS.some((pattern) => pattern.test(link.href))) continue
-    if (link.text && NON_ARTICLE_PATTERNS.some((pattern) => pattern.test(link.text))) continue
+    if (NON_ARTICLE_HREF_PATTERNS.some((pattern) => pattern.test(link.href))) continue
+    if (link.text && NON_ARTICLE_TEXT_PATTERNS.some((pattern) => pattern.test(link.text))) continue
+
+    const title = collapse(link.text)
+    if (sender && title.toLowerCase() === sender) continue
+    if (ADDRESS_PATTERN.test(title)) continue
+    if (DATE_TITLE_PATTERN.test(title)) continue
 
     // A bare host with no path is a home page or section index, not an article.
     if (url.pathname === '/' || url.pathname === '') continue
 
-    // Dedupe ignoring tracking parameters, which differ per link even for the same article.
-    const key = `${host}${url.pathname}`.replace(/\/$/, '').toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
+    const pathKey = `${host}${url.pathname}`.replace(/\/$/, '').toLowerCase()
+    const titleKey = title.toLowerCase()
+    const clickWrapper = (pathCounts.get(pathKey) ?? 0) >= WRAPPER_PATH_THRESHOLD
 
-    // An anchor with no readable text cannot be announced; the model would have to invent a title.
-    if (link.text.trim().length < 8) continue
+    // Same path with different UTM usually means the same article. Eloqua/Moosend wrappers
+    // reuse one path for every story (`/e/er?lid=…`), so those are deduped by title only.
+    if (!clickWrapper && seenPaths.has(pathKey)) continue
+    if (titleKey && seenTitles.has(titleKey)) continue
+    if (!clickWrapper) seenPaths.add(pathKey)
+    if (titleKey) seenTitles.add(titleKey)
 
-    result.push({ text: collapse(link.text), href: link.href })
+    if (title.length < 8) continue
+
+    result.push({ text: title, href: link.href })
   }
 
-  return result
+  return dropDekBlurbs(result)
 }
 
-function matchesSender(list: string[], sender: string): boolean {
+function dropDekBlurbs(links: EmailLink[]): EmailLink[] {
+  const kept: EmailLink[] = []
+  for (const link of links) {
+    const previous = kept[kept.length - 1]
+    if (previous && looksLikeHeadline(previous.text) && !looksLikeHeadline(link.text)) continue
+    kept.push(link)
+  }
+  return kept
+}
+
+const SMALL_WORDS = new Set([
+  'a',
+  'an',
+  'the',
+  'of',
+  'and',
+  'or',
+  'to',
+  'for',
+  'in',
+  'on',
+  'at',
+  'by',
+  'vs',
+  'via',
+  'as'
+])
+
+/** Title Case (or a question) rather than a sentence-case blurb under a headline. */
+function looksLikeHeadline(text: string): boolean {
+  const value = collapse(text).replace(/[?!:]+$/u, '')
+  if (/^plus[,:]?\s/i.test(value)) return false
+  const words = value.split(/\s+/).filter(Boolean)
+  if (words.length < 3) return false
+  let significant = 0
+  let titled = 0
+  for (const word of words) {
+    const bare = word.replace(/[^A-Za-z0-9]/gu, '')
+    if (!bare || SMALL_WORDS.has(bare.toLowerCase())) continue
+    significant += 1
+    if (/^[A-Z0-9]/u.test(bare)) titled += 1
+  }
+  return significant > 0 && titled / significant >= 0.55
+}
+
+function countPathKeys(links: EmailLink[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const link of links) {
+    const url = safeUrl(link.href)
+    if (!url) continue
+    const host = url.hostname.replace(/^www\./, '')
+    const pathKey = `${host}${url.pathname}`.replace(/\/$/, '').toLowerCase()
+    counts.set(pathKey, (counts.get(pathKey) ?? 0) + 1)
+  }
+  return counts
+}
+
+function matchesSender(
+  list: string[],
+  header: Pick<EmailHeader, 'fromAddress' | 'fromName'>
+): boolean {
+  const address = header.fromAddress.toLowerCase()
+  const name = header.fromName.toLowerCase()
+  const host = hostOfAddress(address)
+  const compactName = name.replace(/\s+/g, '')
+
   return list.some((entry) => {
     const value = entry.trim().toLowerCase()
     if (!value) return false
-    // A bare domain entry matches every sender at that domain.
-    if (!value.includes('@')) return sender.endsWith(`@${value}`) || sender.endsWith(value)
-    return sender === value
+    if (value.includes('@')) return address === value
+
+    // `kiplinger.com` matches any mailbox at that domain or a subdomain of it.
+    const looksLikeDomain = value.includes('.') && !/\s/.test(value)
+    if (looksLikeDomain) return host === value || host.endsWith(`.${value}`)
+
+    const compact = value.replace(/\s+/g, '')
+    return name.includes(value) || compactName.includes(compact) || address.includes(compact)
   })
+}
+
+function hostOfAddress(address: string): string {
+  const at = address.lastIndexOf('@')
+  return (at >= 0 ? address.slice(at + 1) : address).replace(/^www\./, '')
 }
 
 function safeUrl(href: string): URL | null {

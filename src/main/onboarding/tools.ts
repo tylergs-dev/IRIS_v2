@@ -37,7 +37,9 @@ export function registerOnboardingTools(): void {
           },
           auto_detect_newsletters: {
             type: Type.BOOLEAN,
-            description: 'True if they want you to watch for newsletters and offer the articles.'
+            description:
+              'True if they also want you to watch for newsletters beyond the known list and ' +
+              'offer those articles. The known list is already handled either way.'
           }
         }
       }

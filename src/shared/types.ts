@@ -36,6 +36,16 @@ export type SummaryLength = 'short' | 'detailed'
 export const ONBOARDING_TOPICS = ['name', 'location', 'pace', 'summary', 'digests'] as const
 export type OnboardingTopic = (typeof ONBOARDING_TOPICS)[number]
 
+/** Publications whose emails are walked as article lists. Editable in Settings. */
+export const DEFAULT_DIGEST_SENDERS = [
+  'Morningstar',
+  'TheStreet',
+  'Kiplinger',
+  'Arizona News',
+  'Consumer Reports',
+  'Vida Lifestyles'
+] as const
+
 export interface UserProfile {
   /** False until onboarding completes, which gates the first-run flow. */
   onboarded: boolean
@@ -58,6 +68,11 @@ export interface UserProfile {
   /** Senders never treated as link-digest newsletters. */
   nonDigestSenders: string[]
   autoDetectDigests: boolean
+  /**
+   * True once the built-in article-review list has been written to this profile. Distinguishes a
+   * first launch (empty list should be seeded) from the user later clearing every entry.
+   */
+  articleReviewListSeeded: boolean
   interests: string[]
   notes: string | null
   /**

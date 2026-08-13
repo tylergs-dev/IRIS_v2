@@ -1,6 +1,7 @@
 import type {
   EmailBody,
   EmailHeader,
+  EmailLink,
   EmailModePhase,
   EmailModeSnapshot,
   SavedArticle
@@ -69,6 +70,8 @@ export class EmailModeMachine {
   private currentBody: EmailBody | null = null
   private articles: ArticleCandidate[] = []
   private articleIndex = -1
+  /** Digest links held after a summary until the user asks to go through the articles. */
+  private pendingArticleLinks: EmailLink[] = []
 
   /** Running on cached headers because Gmail was unreachable. Nothing may be mutated. */
   private offline = false
@@ -156,7 +159,9 @@ export class EmailModeMachine {
     await this.readCurrentHeader(0)
     return {
       ok: true,
-      note: `Starting email mode with ${this.queue.length} unread messages.`
+      note:
+        `Started with ${this.queue.length} unread. Do not ask whether to begin — the first email ` +
+        'is already being read. Convey it and wait for skip, read more, or delete.'
     }
   }
 
@@ -179,6 +184,7 @@ export class EmailModeMachine {
     this.currentBody = null
     this.articles = []
     this.articleIndex = -1
+    this.pendingArticleLinks = []
     this.offline = false
   }
 
@@ -189,6 +195,7 @@ export class EmailModeMachine {
     this.currentBody = null
     this.articles = []
     this.articleIndex = -1
+    this.pendingArticleLinks = []
 
     const header = this.current()
     if (!header) {
@@ -336,6 +343,12 @@ export class EmailModeMachine {
     const header = this.current()
     if (!header) return { ok: false, note: 'There is no email open to read.' }
 
+    if (this.pendingArticleLinks.length > 0 && this.phase === 'awaitingPostSummaryChoice') {
+      const links = this.pendingArticleLinks
+      this.pendingArticleLinks = []
+      return this.beginArticleReview(header, links)
+    }
+
     this.setPhase('summarizing')
 
     let body: EmailBody
@@ -366,17 +379,30 @@ export class EmailModeMachine {
       }
     }
 
+    const isDigest = digest.verdict === 'digest' || (await this.confirmDigest(digest, header))
+    if (isDigest && digest.articleLinks.length > 0) {
+      this.pendingArticleLinks = digest.articleLinks
+    }
+
     await this.narrate(
       `Read this summary aloud in a natural voice, without adding anything to it: ${summary}`
     )
 
-    const isDigest = digest.verdict === 'digest' || (await this.confirmDigest(digest, header))
-    if (isDigest && digest.articleLinks.length > 0) {
-      return this.beginArticleReview(header, digest.articleLinks)
-    }
-
     this.setPhase('awaitingPostSummaryChoice')
-    return { ok: true, note: 'Summary read. Ask what they would like to do with this email.' }
+    if (this.pendingArticleLinks.length > 0) {
+      return {
+        ok: true,
+        note:
+          `Summary read. This looks like a newsletter with ${this.pendingArticleLinks.length} ` +
+          'articles. After you finish the summary, offer in one short sentence to go through ' +
+          'them one at a time. Do not list titles and do not start reviewing them until they ' +
+          'say they want to. If they agree, call email_action with read_more.'
+      }
+    }
+    return {
+      ok: true,
+      note: 'Summary read. Offer Skip or Delete as the next step. Keep it to one short question.'
+    }
   }
 
   /** Only reached when the heuristic is genuinely borderline, so the model call is rare. */
@@ -421,13 +447,12 @@ export class EmailModeMachine {
 
     if (this.articles.length === 0) {
       this.setPhase('awaitingPostSummaryChoice')
-      return { ok: true, note: 'Ask what they would like to do with this email.' }
+      return {
+        ok: true,
+        note: 'Offer Skip or Delete as the next step. Keep it to one short question.'
+      }
     }
 
-    await this.narrate(
-      `This is a newsletter with ${this.articles.length} articles. Offer to go through them one ` +
-        'at a time, in one short sentence.'
-    )
     this.articleIndex = -1
     this.setPhase('articleReview')
     return this.nextArticle()
@@ -455,6 +480,13 @@ export class EmailModeMachine {
     type: 'saveArticle' | 'skipArticle' | 'openArticle'
   ): Promise<ActionOutcome> {
     if (this.phase !== 'articleReview') {
+      if (this.phase === 'awaitingPostSummaryChoice' && this.pendingArticleLinks.length > 0) {
+        const current = this.current()
+        if (!current) return { ok: false, note: 'There is no email open.' }
+        const links = this.pendingArticleLinks
+        this.pendingArticleLinks = []
+        return this.beginArticleReview(current, links)
+      }
       return { ok: false, note: 'There are no articles being reviewed right now.' }
     }
 

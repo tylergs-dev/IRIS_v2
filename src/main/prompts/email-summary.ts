@@ -64,7 +64,8 @@ export function headerAnnouncement(
   const when = spokenDate ? `, ${spokenDate}` : ''
   return (
     `${place}From ${header.fromName}${when}. Subject: ${header.subject}. ` +
-    'Read the sender and subject to the user in your own natural phrasing, then ask what they ' +
-    'would like to do. Do not list the available commands unless they seem unsure.'
+    'Read the sender and subject to the user in your own natural phrasing, then offer Skip, ' +
+    'Read More, or Delete as the next step. Keep it to one short question. Do not add other ' +
+    'options unless they ask.'
   )
 }

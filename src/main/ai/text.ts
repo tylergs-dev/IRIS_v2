@@ -8,8 +8,16 @@ const log = createLogger('text-model')
  * Summarization and classification run as ordinary generateContent calls rather than through the
  * Live session. The Live model is billed on re-processed audio context every turn, so pushing a
  * 12 KB newsletter through it would be both slow and expensive.
+ *
+ * There is no `gemini-3.1-flash` on generateContent — that id 404s. The 3.1 Flash text model is
+ * `gemini-3.1-flash-lite`; the Live sibling stays `gemini-3.1-flash-live-preview`.
  */
-export const TEXT_MODEL = 'gemini-3.1-flash'
+export const TEXT_MODEL = 'gemini-3.1-flash-lite'
+
+/** 429 and 503 are Google saying "try again in a moment", not a bad prompt. */
+const RETRYABLE_STATUS = new Set([429, 503])
+const MAX_ATTEMPTS = 3
+const RETRY_BASE_MS = 700
 
 let client: GoogleGenAI | null = null
 
@@ -35,14 +43,41 @@ export function resetTextClient(): void {
 
 export async function generateText(prompt: string): Promise<string> {
   const ai = await getClient()
-  const response = await ai.models.generateContent({
-    model: TEXT_MODEL,
-    contents: prompt,
-    config: { temperature: 0.2 }
-  })
-  const text = response.text?.trim()
-  if (!text) throw new Error('The model returned nothing.')
-  return text
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await ai.models.generateContent({
+        model: TEXT_MODEL,
+        contents: prompt,
+        config: { temperature: 0.2 }
+      })
+      const text = response.text?.trim()
+      if (!text) throw new Error('The model returned nothing.')
+      return text
+    } catch (error) {
+      lastError = error
+      const status = statusOf(error)
+      if (!RETRYABLE_STATUS.has(status) || attempt === MAX_ATTEMPTS) throw error
+      const delay = RETRY_BASE_MS * 2 ** (attempt - 1)
+      log.warn(`text model ${status}, retrying in ${delay}ms (attempt ${attempt})`)
+      await sleep(delay)
+    }
+  }
+
+  throw lastError
+}
+
+function statusOf(error: unknown): number {
+  if (error && typeof error === 'object' && 'status' in error) {
+    const status = (error as { status: unknown }).status
+    if (typeof status === 'number') return status
+  }
+  return 0
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /**

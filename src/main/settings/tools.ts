@@ -3,6 +3,8 @@ import type { SpeechPace, SummaryLength } from '../../shared/types'
 import { LIVE_VOICES, VOICE_NAMES, describeVoice, isVoiceName } from '../../shared/voices'
 import { createLogger } from '../log'
 import { gmail } from '../skills/email/GmailService'
+import { browser } from '../skills/browse/BrowserService'
+import { runStartEmailMode } from '../skills/SkillOrchestrator'
 import { startTask } from '../skills/tasks'
 import { getProfile, setProfile } from '../storage/profile'
 import { secretsPresence } from '../storage/secrets'
@@ -25,8 +27,10 @@ export function registerSettingsTools(): void {
     declaration: {
       name: 'connect_gmail',
       description:
-        'Start connecting the user\'s Gmail account. Call this when they ask to connect, set up, ' +
-        'or sign in to their email, or when an email request fails because Gmail is not connected.'
+        'Open Google sign-in so the user can link their Gmail account. Call this only when they ' +
+        'explicitly ask to connect, set up, sign in, or link Gmail. Do not call this when they ' +
+        'ask to do, check, read, or go through their emails — that is start_email_mode, even if ' +
+        'you are unsure whether Gmail is connected.'
     },
     handler: async () => {
       // The OAuth client credentials, not a saved sign-in: without them there is nothing to open a
@@ -41,10 +45,10 @@ export function registerSettingsTools(): void {
         }
       }
 
+      // "Let's do emails" often lands here instead of start_email_mode. If they are already signed
+      // in, they wanted to go through the inbox, not to hear that Gmail is connected.
       if (gmail.getAccount()) {
-        return {
-          note: `Their Gmail is already connected. Say so briefly rather than connecting again.`
-        }
+        return runStartEmailMode()
       }
 
       // Deliberately not awaited: the browser flow can take a minute or more, and Gemini 3.1 has
@@ -71,6 +75,57 @@ export function registerSettingsTools(): void {
           'helped install IRIS — Google shows a "has not verified this app" warning once, and they ' +
           'should choose Advanced and continue. Say you will confirm when it is done, then wait ' +
           'quietly.'
+      }
+    }
+  })
+
+  registerTool({
+    declaration: {
+      name: 'sign_into_websites',
+      description:
+        'Open a real browser window so a helper can sign into subscription sites such as ' +
+        'Morningstar or Kiplinger. IRIS’s browser is separate from the user’s, so those sites ' +
+        'are unsigned-in until this is done. Call this when they ask to sign into a website, ' +
+        'log into Morningstar, or when a page needed a subscription. Do not call this for Gmail ' +
+        '— that is connect_gmail. This needs whoever helped install IRIS; do not try to type a ' +
+        'password yourself.',
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          site: {
+            type: Type.STRING,
+            description:
+              'A site name or https address to open, such as Morningstar or kiplinger.com. ' +
+              'Leave blank to open Morningstar.'
+          }
+        }
+      }
+    },
+    handler: async (args) => {
+      const site = typeof args.site === 'string' ? args.site.trim() : ''
+      const task = startTask('browse', 'browser', 'Website sign-in')
+      void browser.openSignInSession(site || undefined).then(
+        (host) =>
+          task.finish(
+            `A browser window is open at ${host}. Tell them this needs whoever helped install ` +
+              'IRIS: they should sign in, then close the window. Those sign-ins are remembered. ' +
+              'Then wait quietly.'
+          ),
+        (error: unknown) => {
+          log.warn('website sign-in window failed', error)
+          const detail = error instanceof Error ? error.message : String(error)
+          return task.fail(
+            `The sign-in window did not open: ${detail} Tell them plainly and offer to try again.`
+          )
+        }
+      )
+
+      return {
+        started: true,
+        note:
+          'Tell them a browser window is opening so a helper can sign into their subscription ' +
+          'sites. This is the same kind of helper step as Gmail. Say you will confirm when the ' +
+          'window is ready, then wait quietly.'
       }
     }
   })

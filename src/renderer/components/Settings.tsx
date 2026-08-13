@@ -3,6 +3,89 @@ import type { SecretName, SpeechPace, SummaryLength, UserProfile } from '@shared
 import { DEFAULT_VOICE, LIVE_VOICES, type VoiceName } from '@shared/voices'
 import { useStore } from '../store'
 
+function ArticleReviewSenders({
+  profile,
+  patch
+}: {
+  profile: UserProfile | null
+  patch: (update: Partial<UserProfile>) => void
+}): React.JSX.Element {
+  const [draft, setDraft] = useState('')
+  const senders = profile?.digestSenders ?? []
+
+  function add(): void {
+    const value = draft.trim()
+    if (!value) return
+    if (senders.some((entry) => entry.toLowerCase() === value.toLowerCase())) {
+      setDraft('')
+      return
+    }
+    patch({ digestSenders: [...senders, value] })
+    setDraft('')
+  }
+
+  return (
+    <section className="card">
+      <h3>Article review senders</h3>
+      <p>
+        IRIS only walks article links one by one for these senders. Everyone else is summarized
+        like a normal email. A name, a domain, or a full address all work.
+      </p>
+      {senders.length === 0 ? (
+        <p className="empty">None yet — add a publication below, or turn on extra detection.</p>
+      ) : (
+        <ul className="list">
+          {senders.map((sender) => (
+            <li key={sender}>
+              <span>{sender}</span>
+              <button
+                className="btn"
+                onClick={() =>
+                  patch({ digestSenders: senders.filter((entry) => entry !== sender) })
+                }
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="field" style={{ marginTop: 14 }}>
+        <label htmlFor="digest-sender">Add a sender</label>
+        <div className="row">
+          <input
+            id="digest-sender"
+            value={draft}
+            placeholder="Morningstar, kiplinger.com, or news@example.com"
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') add()
+            }}
+            style={{ flex: 1, minWidth: 240 }}
+          />
+          <button className="btn" onClick={add} disabled={!draft.trim()}>
+            Add
+          </button>
+        </div>
+      </div>
+      <div className="field">
+        <label htmlFor="auto-digest">Other newsletters</label>
+        <div className="row">
+          <input
+            id="auto-digest"
+            type="checkbox"
+            checked={profile?.autoDetectDigests ?? false}
+            onChange={(event) => patch({ autoDetectDigests: event.target.checked })}
+          />
+          <span className="hint">
+            Also try to notice unlisted newsletters and offer to review their articles.
+          </span>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function KeyField({
   name,
   label,
@@ -204,22 +287,9 @@ export function Settings(): React.JSX.Element {
               </select>
             </div>
           </div>
-          <div className="field">
-            <label htmlFor="auto-digest">Newsletter detection</label>
-            <div className="row">
-              <input
-                id="auto-digest"
-                type="checkbox"
-                checked={profile?.autoDetectDigests ?? true}
-                onChange={(event) => patch({ autoDetectDigests: event.target.checked })}
-              />
-              <span className="hint">
-                Automatically notice when an email is just a list of article links and offer to
-                review them one by one.
-              </span>
-            </div>
-          </div>
         </section>
+
+        <ArticleReviewSenders profile={profile} patch={patch} />
 
         <section className="card">
           <h3>Spoken setup</h3>

@@ -28,8 +28,9 @@ const CUES: Record<OnboardingTopic, string> = {
     'Ask whether, when you summarize an email, they would rather have the short version or a ' +
     'bit more detail. Mention they can always ask for more on any single email.',
   digests:
-    'Ask whether you should watch for newsletters — emails that are really just a list of ' +
-    'article links — and offer to go through the articles one at a time when one arrives.'
+    'You already go through articles from a few known newsletters — Morningstar, TheStreet, ' +
+    'Kiplinger, Arizona News, Consumer Reports, and Vida Lifestyles. Ask whether they also want ' +
+    'you to watch for other newsletters and offer to go through those articles one at a time.'
 }
 
 /**

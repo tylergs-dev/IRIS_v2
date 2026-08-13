@@ -133,13 +133,13 @@ export class GmailService {
     let ids = await this.listIds(api, `category:primary ${negations}`)
 
     if (ids.length === 0) {
-      // Inbox tabs can be turned off entirely, in which case nothing carries a category label and
-      // `category:primary` matches nothing. Without this the user hears "no new mail" while
-      // staring at a full inbox.
+      // Tabs off: `category:primary` matches nothing, but Gmail still stamps CATEGORY_UPDATES
+      // etc. on messages that appear in the unified inbox. Applying the category negations here
+      // would drop most of the unread mail the user can actually see. Use the inbox as-is.
       const total = await this.listIds(api, '')
       if (total.length > 0) {
         log.info('category:primary matched nothing but the inbox is not empty; tabs likely off')
-        ids = await this.listIds(api, negations)
+        ids = total
       }
     }
 

@@ -29,6 +29,9 @@ export function classifyEmailUtterance(utterance: string): EmailAction | null {
   if (/\b(read (it )?(more|the rest|it all)?|open( it)?|tell me more|what does it say)\b/.test(text)) {
     return { type: 'readMore' }
   }
+  if (/\b((go through|read) (the )?(articles?|links|newsletter)|the articles)\b/.test(text)) {
+    return { type: 'readMore' }
+  }
   if (/\b(save( it)?|add (it )?to (my )?reading list|keep it)\b/.test(text)) {
     return { type: 'saveArticle' }
   }
@@ -44,15 +47,22 @@ function announce(outcome: ActionOutcome): Record<string, unknown> {
   return outcome.ok ? { ok: true, note: outcome.note } : { ok: false, error: outcome.note }
 }
 
+export async function runStartEmailMode(): Promise<Record<string, unknown>> {
+  return announce(await emailMode.start())
+}
+
 export function registerEmailSkill(): void {
   registerTool({
     declaration: {
       name: 'start_email_mode',
       description:
-        'Begin going through the unread mail in the primary inbox, one email at a time. Use this ' +
-        'when the user asks to do their emails, check their mail, or hear what is new.'
+        'Begin going through the unread mail in the primary inbox, one email at a time. Call this ' +
+        'immediately — do not ask first — when the user wants to do their emails, check their ' +
+        'mail, go through the inbox, or hear what is new. Phrases like "let\'s do emails", "can ' +
+        'we do emails", "check my mail", and "go through my inbox" all mean this. Never call ' +
+        'connect_gmail for those requests.'
     },
-    handler: async () => announce(await emailMode.start())
+    handler: () => runStartEmailMode()
   })
 
   registerTool({
@@ -80,10 +90,11 @@ export function registerEmailSkill(): void {
             ],
             description:
               'next skips to the following email and leaves it unread. delete moves it to the ' +
-              'trash. read_more opens and summarizes it. move files it under a label. repeat ' +
-              'reads the sender and subject again. stop leaves email mode. save_article adds the ' +
-              'current article to the reading list. skip_article goes to the next article. ' +
-              'open_article reads the article itself aloud.'
+              'trash. read_more opens and summarizes it, or starts article review when they ask ' +
+              'to go through a newsletter after hearing the summary. move files it under a ' +
+              'label. repeat reads the sender and subject again. stop leaves email mode. ' +
+              'save_article adds the current article to the reading list. skip_article goes to ' +
+              'the next article. open_article reads the article itself aloud.'
           },
           label: {
             type: Type.STRING,
@@ -161,7 +172,7 @@ export function registerEmailSkill(): void {
           sender: {
             type: Type.STRING,
             description:
-              'The email address, or part of it such as the domain. Leave this out to use the ' +
+              'The publication name, domain, or email address. Leave this out to use the ' +
               'sender of the email currently open.'
           }
         },

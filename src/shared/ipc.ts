@@ -64,6 +64,12 @@ export type IpcContract = {
   'update:applyNow': { args: []; ret: void }
 
   'shell:openExternal': { args: [url: string]; ret: void }
+
+  /**
+   * Opens IRIS's own browser in a visible window so a helper can sign into subscriber sites.
+   * Optional start URL; defaults to Morningstar.
+   */
+  'browse:signIn': { args: [url?: string]; ret: void }
 }
 
 /** Main -> renderer push events. */
@@ -125,7 +131,8 @@ export const IPC_CHANNELS = [
   'onboarding:start',
   'update:check',
   'update:applyNow',
-  'shell:openExternal'
+  'shell:openExternal',
+  'browse:signIn'
 ] as const satisfies readonly IpcChannel[]
 
 export const IPC_EVENTS = [
