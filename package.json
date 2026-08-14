@@ -1,6 +1,6 @@
 {
   "name": "iris",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "IRIS — an AI voice conversational assistant for blind users, focused on Gmail triage",
   "private": true,
   "main": "./out/main/index.js",
