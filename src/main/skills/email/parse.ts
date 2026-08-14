@@ -1,6 +1,7 @@
 import type { gmail_v1 } from '@googleapis/gmail'
 import { convert } from 'html-to-text'
 import * as cheerio from 'cheerio'
+import type { Element } from 'domhandler'
 import type { EmailBody, EmailHeader, EmailLink } from '../../../shared/types'
 
 type Part = gmail_v1.Schema$MessagePart
@@ -156,7 +157,7 @@ function collectMarkers($: cheerio.CheerioAPI): Marker[] {
   return markers
 }
 
-function titleFromOwnAnchor(node: cheerio.Cheerio<cheerio.Element>): string {
+function titleFromOwnAnchor(node: cheerio.Cheerio<Element>): string {
   const own = collapseSpace(node.text())
   if (isHeadline(own)) return own
   const img = node.find('img').first()
