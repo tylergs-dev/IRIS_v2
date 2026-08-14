@@ -18,7 +18,10 @@
     "pack:dir": "npm run build && electron-builder --dir",
     "pack:win": "npm run build && electron-builder --win --dir",
     "release:win": "npm run pack:win && node scripts/release-win.mjs",
-    "models": "node scripts/fetch-wakeword-models.mjs"
+    "models": "node scripts/fetch-wakeword-models.mjs",
+    "bump:major": "npm version major --no-git-tag-version",
+    "bump:minor": "npm version minor --no-git-tag-version",
+    "bump:fix": "npm version patch --no-git-tag-version"
   },
   "dependencies": {
     "@google/genai": "2.16.0",
