@@ -10,22 +10,32 @@ import { browser } from './browse/BrowserService'
 import { EmailModeMachine, type ActionOutcome, type EmailAction } from './email/EmailModeMachine'
 import { gmail } from './email/GmailService'
 import { search } from './search/TavilyService'
-import { STARTING_ACK, startTask } from './tasks'
+import { STARTING_ACK, SILENT_ACK, startTask } from './tasks'
 
 const log = createLogger('skills')
 
 export const emailMode = new EmailModeMachine((cue) => voice.inject('email', cue))
 
 /**
- * Actions that wait on Gmail or a model call. Instant ones (repeat, stop, local skips) stay
- * blocking so the result is the first thing spoken.
+ * Actions whose handler calls narrate() must run after the tool returns — injecting mid-tool-call
+ * queues speech while the session is still speaking/thinking and it never plays.
  */
 const SLOW_EMAIL_ACTIONS = new Set<EmailAction['type']>([
+  'next',
   'readMore',
   'delete',
   'move',
-  'openArticle',
-  'saveArticle'
+  'repeat',
+  'saveArticle',
+  'skipArticle'
+])
+
+const NARRATING_EMAIL_ACTIONS = new Set<EmailAction['type']>([
+  'next',
+  'readMore',
+  'repeat',
+  'saveArticle',
+  'skipArticle'
 ])
 
 /** Keyword classifier for typed input and UI buttons, so nothing depends on the model. */
@@ -42,7 +52,7 @@ export function classifyEmailUtterance(utterance: string): EmailAction | null {
   if (/\b(read (it )?(more|the rest|it all)?|open( it)?|tell me more|what does it say)\b/.test(text)) {
     return { type: 'readMore' }
   }
-  if (/\b((go through|read) (the )?(articles?|links|newsletter)|the articles)\b/.test(text)) {
+  if (/\b((go through|read|review) (the )?(articles?|links|newsletter)|the articles|review articles)\b/.test(text)) {
     return { type: 'readMore' }
   }
   if (/\b(save( it)?|add (it )?to (my )?reading list|keep it)\b/.test(text)) {
@@ -61,11 +71,16 @@ function announce(outcome: ActionOutcome): Record<string, unknown> {
 }
 
 /** Run slow email work after the tool returns so IRIS can speak the ack first. */
-function announceLater(work: () => Promise<ActionOutcome>): Record<string, unknown> {
+function announceLater(
+  work: () => Promise<ActionOutcome>,
+  ack: string = STARTING_ACK
+): Record<string, unknown> {
   void work()
     .then(async (outcome) => {
       emit('email:snapshot', emailMode.snapshot())
-      await voice.inject('email', outcome.note)
+      if (outcome.note.trim() && !outcome.narrated) {
+        await voice.inject('email', outcome.note)
+      }
     })
     .catch((error) => {
       log.error('background email work failed', error)
@@ -75,7 +90,7 @@ function announceLater(work: () => Promise<ActionOutcome>): Record<string, unkno
       )
     })
     .finally(() => emailMode.endWork())
-  return { started: true, note: STARTING_ACK }
+  return { started: true, note: ack }
 }
 
 export async function runStartEmailMode(): Promise<Record<string, unknown>> {
@@ -86,7 +101,9 @@ export async function runStartEmailMode(): Promise<Record<string, unknown>> {
     .start()
     .then(async (outcome) => {
       emit('email:snapshot', emailMode.snapshot())
-      await voice.inject('email', outcome.note)
+      if (outcome.note.trim()) {
+        await voice.inject('email', outcome.note)
+      }
     })
     .catch((error) => {
       log.error('background email start failed', error)
@@ -133,16 +150,15 @@ export function registerEmailSkill(): void {
               'repeat',
               'stop',
               'save_article',
-              'skip_article',
-              'open_article'
+              'skip_article'
             ],
             description:
               'next skips to the following email and leaves it unread. delete moves it to the ' +
               'trash. read_more opens and summarizes it, or starts article review when they ask ' +
-              'to go through a newsletter after hearing the summary. move files it under a ' +
+              'to review articles after hearing the summary. move files it under a ' +
               'label. repeat reads the sender and subject again. stop leaves email mode. ' +
               'save_article adds the current article to the reading list. skip_article goes to ' +
-              'the next article. open_article reads the article itself aloud.'
+              'the next article.'
           },
           label: {
             type: Type.STRING,
@@ -163,7 +179,8 @@ export function registerEmailSkill(): void {
             error: 'Still working on that. Say so briefly and wait.'
           }
         }
-        return announceLater(() => emailMode.handle(action, true))
+        const ack = NARRATING_EMAIL_ACTIONS.has(action.type) ? SILENT_ACK : STARTING_ACK
+        return announceLater(() => emailMode.handle(action, true), ack)
       }
 
       return announce(await emailMode.handle(action))
@@ -323,6 +340,7 @@ export function registerResearchSkills(): void {
       if (!query) return { error: 'Ask them what they would like me to look up.' }
 
       const task = startTask('search', 'search', query)
+      task.step('Searching…', 0.4)
       void search(query).then(
         (result) =>
           task.finish(
@@ -438,8 +456,6 @@ function toEmailAction(args: Record<string, unknown>): EmailAction | null {
       return { type: 'saveArticle' }
     case 'skip_article':
       return { type: 'skipArticle' }
-    case 'open_article':
-      return { type: 'openArticle' }
     default:
       return null
   }

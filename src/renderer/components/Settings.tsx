@@ -287,6 +287,22 @@ export function Settings(): React.JSX.Element {
               </select>
             </div>
           </div>
+          <div className="field">
+            <label htmlFor="activity-sounds">Working sounds</label>
+            <div className="row">
+              <input
+                id="activity-sounds"
+                type="checkbox"
+                checked={profile?.activitySounds !== false}
+                onChange={(event) => patch({ activitySounds: event.target.checked })}
+              />
+              <span className="hint">
+                Play soft steady beeps while IRIS is searching, reading email, or waiting on a
+                tool — they climb gently with progress when known, and fill the silence before
+                she speaks again.
+              </span>
+            </div>
+          </div>
         </section>
 
         <ArticleReviewSenders profile={profile} patch={patch} />

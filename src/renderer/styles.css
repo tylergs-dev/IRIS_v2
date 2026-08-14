@@ -630,6 +630,25 @@ button {
   transition: width 0.3s ease;
 }
 
+.task-bar--indeterminate {
+  overflow: hidden;
+}
+
+.task-bar--indeterminate i {
+  width: 35%;
+  transition: none;
+  animation: task-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes task-shimmer {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(290%);
+  }
+}
+
 .spinner {
   width: 12px;
   height: 12px;

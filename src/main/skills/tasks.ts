@@ -14,6 +14,10 @@ const log = createLogger('task')
 export const STARTING_ACK =
   'Say only one to three words that you have started, then wait quietly. Do not explain.'
 
+/** When the app will narrate the result — speaking over it causes duplicates. */
+export const SILENT_ACK =
+  'Do not speak. The app will read the next part on its own. Wait in complete silence.'
+
 /**
  * Progress is injected into the live session as text, which the model then speaks. Injecting
  * faster than the model can talk just queues narration it will never catch up on, so routine

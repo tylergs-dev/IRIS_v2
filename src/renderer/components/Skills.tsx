@@ -175,31 +175,40 @@ export function Skills(): React.JSX.Element {
           {readingList.length === 0 ? (
             <p className="empty">Nothing saved yet.</p>
           ) : (
-            <ul className="list">
-              {readingList.map((article) => (
-                <li key={article.id}>
-                  <span>
-                    <a
-                      href={article.href}
-                      onClick={(event) => {
-                        event.preventDefault()
-                        void window.iris.invoke('shell:openExternal', article.href)
-                      }}
+            <>
+              <ul className="list">
+                {readingList.map((article) => (
+                  <li key={article.id}>
+                    <span>
+                      <a
+                        href={article.href}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          void window.iris.invoke('shell:openExternal', article.href)
+                        }}
+                      >
+                        {article.title}
+                      </a>
+                      <br />
+                      <span className="hint">{article.sourceSender}</span>
+                    </span>
+                    <button
+                      className="btn"
+                      onClick={() => void window.iris.invoke('reading:remove', article.id)}
                     >
-                      {article.title}
-                    </a>
-                    <br />
-                    <span className="hint">{article.sourceSender}</span>
-                  </span>
-                  <button
-                    className="btn"
-                    onClick={() => void window.iris.invoke('reading:remove', article.id)}
-                  >
-                    Remove
-                  </button>
-                </li>
-              ))}
-            </ul>
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <button
+                className="btn btn-danger"
+                style={{ marginTop: 10 }}
+                onClick={() => void window.iris.invoke('reading:removeAll')}
+              >
+                Remove all
+              </button>
+            </>
           )}
         </section>
       </div>

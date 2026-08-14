@@ -41,6 +41,11 @@ export function removeArticle(id: string): void {
   emit('reading:changed', next)
 }
 
+export function clearArticles(): void {
+  getStore().set({ articles: [] })
+  emit('reading:changed', [])
+}
+
 export async function flushReadingList(): Promise<void> {
   await store?.settled()
 }

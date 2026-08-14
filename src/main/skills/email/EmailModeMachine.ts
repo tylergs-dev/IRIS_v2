@@ -9,8 +9,12 @@ import type {
 import { generateJsonArray, generateText } from '../../ai/text'
 import { emit } from '../../ipc/register'
 import { createLogger } from '../../log'
-import { articleAnnouncement, articleExtractionPrompt } from '../../prompts/article-review'
-import { emailSummaryPrompt, headerAnnouncement } from '../../prompts/email-summary'
+import { articleAnnouncement, articleExtractionPrompt, ARTICLE_REVIEW_COMPLETE } from '../../prompts/article-review'
+import {
+  emailSummaryPrompt,
+  headerAnnouncement,
+  postSummaryChoice
+} from '../../prompts/email-summary'
 import { getProfile } from '../../storage/profile'
 import { listArticles, saveArticle } from '../../storage/reading-list'
 import { detectLinkDigest } from './digest-detect'
@@ -33,12 +37,13 @@ export type EmailAction =
   | { type: 'stop' }
   | { type: 'saveArticle' }
   | { type: 'skipArticle' }
-  | { type: 'openArticle' }
 
 export interface ActionOutcome {
   ok: boolean
   /** Short factual result for the model to convey; never spoken verbatim. */
   note: string
+  /** When true, narrate() already queued the main speech — skip a redundant inject. */
+  narrated?: boolean
 }
 
 interface ArticleCandidate {
@@ -54,8 +59,7 @@ const MUTATING_ACTIONS = new Set<EmailAction['type']>([
   'delete',
   'move',
   'readMore',
-  'saveArticle',
-  'openArticle'
+  'saveArticle'
 ])
 
 /**
@@ -106,11 +110,13 @@ export class EmailModeMachine {
   tryBeginWork(): boolean {
     if (this.isBusy()) return false
     this.inFlight = true
+    emit('email:snapshot', this.snapshot())
     return true
   }
 
   endWork(): void {
     this.inFlight = false
+    emit('email:snapshot', this.snapshot())
   }
 
   /**
@@ -137,7 +143,8 @@ export class EmailModeMachine {
       current: current ?? null,
       articleIndex: this.articleIndex >= 0 ? this.articleIndex + 1 : null,
       articleCount: this.articles.length > 0 ? this.articles.length : null,
-      canUndo: undoStack.canUndo()
+      canUndo: undoStack.canUndo(),
+      busy: this.isBusy()
     }
   }
 
@@ -221,12 +228,7 @@ export class EmailModeMachine {
     if (generation !== this.startGeneration) {
       return { ok: false, note: 'Left email mode.' }
     }
-    return {
-      ok: true,
-      note:
-        `Started with ${this.queue.length} unread. Do not ask whether to begin — the first email ` +
-        'is already being read. Convey it and wait for skip, read more, or delete.'
-    }
+    return { ok: true, note: '', narrated: true }
   }
 
   stop(): ActionOutcome {
@@ -333,7 +335,6 @@ export class EmailModeMachine {
         return this.handleRepeat()
       case 'saveArticle':
       case 'skipArticle':
-      case 'openArticle':
         return this.handleArticleAction(action.type)
       default:
         return { ok: false, note: 'That is not something I can do right now.' }
@@ -344,7 +345,7 @@ export class EmailModeMachine {
     if (this.phase === 'articleReview') return this.handleArticleAction('skipArticle')
     // Skipping deliberately leaves the message unread, so it is still waiting next time.
     await this.advance()
-    return { ok: true, note: 'Skipped. Moving to the next email.' }
+    return { ok: true, note: '', narrated: true }
   }
 
   private async handleDelete(): Promise<ActionOutcome> {
@@ -409,14 +410,14 @@ export class EmailModeMachine {
         await this.narrate(
           articleAnnouncement(article.title, this.articleIndex + 1, this.articles.length)
         )
-        return { ok: true, note: 'Repeated the article title.' }
+        return { ok: true, note: '', narrated: true }
       }
     }
 
     await this.narrate(
       headerAnnouncement(header, describeDate(header.date), this.position + 1, this.queue.length)
     )
-    return { ok: true, note: 'Repeated the sender and subject.' }
+    return { ok: true, note: '', narrated: true }
   }
 
   private async handleReadMore(): Promise<ActionOutcome> {
@@ -464,25 +465,14 @@ export class EmailModeMachine {
       this.pendingArticleLinks = digest.articleLinks
     }
 
+    const closing = postSummaryChoice(this.pendingArticleLinks.length)
     await this.narrate(
-      `Read this summary aloud in a natural voice, without adding anything to it: ${summary}`
+      `Read this summary aloud in a natural voice, without adding anything to it: ${summary} ` +
+      `When you finish the summary, ask exactly: "${closing}" Do not ask any other question.`
     )
 
     this.setPhase('awaitingPostSummaryChoice')
-    if (this.pendingArticleLinks.length > 0) {
-      return {
-        ok: true,
-        note:
-          `Summary read. This looks like a newsletter with ${this.pendingArticleLinks.length} ` +
-          'articles. After you finish the summary, offer in one short sentence to go through ' +
-          'them one at a time. Do not list titles and do not start reviewing them until they ' +
-          'say they want to. If they agree, call email_action with read_more.'
-      }
-    }
-    return {
-      ok: true,
-      note: 'Summary read. Offer Skip or Delete as the next step. Keep it to one short question.'
-    }
+    return { ok: true, narrated: true, note: '' }
   }
 
   /** Only reached when the heuristic is genuinely borderline, so the model call is rare. */
@@ -527,10 +517,10 @@ export class EmailModeMachine {
 
     if (this.articles.length === 0) {
       this.setPhase('awaitingPostSummaryChoice')
-      return {
-        ok: true,
-        note: 'Offer Skip or Delete as the next step. Keep it to one short question.'
-      }
+      await this.narrate(
+        `Ask exactly: "${postSummaryChoice(0)}" Do not add any other question or options.`
+      )
+      return { ok: true, narrated: true, note: '' }
     }
 
     this.articleIndex = -1
@@ -538,26 +528,31 @@ export class EmailModeMachine {
     return this.nextArticle()
   }
 
+  private async finishArticleReview(): Promise<ActionOutcome> {
+    this.articles = []
+    this.articleIndex = -1
+    await this.narrate(
+      `Say exactly once, without adding anything: "${ARTICLE_REVIEW_COMPLETE}"`
+    )
+    await this.advance()
+    return { ok: true, note: '', narrated: true }
+  }
+
   private async nextArticle(): Promise<ActionOutcome> {
     this.articleIndex += 1
     const article = this.articles[this.articleIndex]
 
-    if (!article) {
-      this.articles = []
-      this.articleIndex = -1
-      await this.advance()
-      return { ok: true, note: 'That was the last article in that newsletter.' }
-    }
+    if (!article) return this.finishArticleReview()
 
     this.setPhase('articleReview')
     await this.narrate(
       articleAnnouncement(article.title, this.articleIndex + 1, this.articles.length)
     )
-    return { ok: true, note: `Read article ${this.articleIndex + 1}.` }
+    return { ok: true, note: '', narrated: true }
   }
 
   private async handleArticleAction(
-    type: 'saveArticle' | 'skipArticle' | 'openArticle'
+    type: 'saveArticle' | 'skipArticle'
   ): Promise<ActionOutcome> {
     if (this.phase !== 'articleReview') {
       if (this.phase === 'awaitingPostSummaryChoice' && this.pendingArticleLinks.length > 0) {
@@ -576,28 +571,13 @@ export class EmailModeMachine {
 
     if (type === 'skipArticle') return this.nextArticle()
 
-    const saved: SavedArticle = saveArticle({
+    saveArticle({
       title: article.title,
       href: article.href,
       sourceSender: header.fromName
     })
-
-    if (type === 'saveArticle') {
-      const outcome = await this.nextArticle()
-      return {
-        ok: true,
-        note: `Saved "${saved.title}" to the reading list. ${outcome.note}`
-      }
-    }
-
-    // 'openArticle' hands off to the browser skill, which narrates on its own. Saving first
-    // means the article is not lost if fetching the page fails.
-    return {
-      ok: true,
-      note:
-        `Saved "${saved.title}" to the reading list. Now use the read_web_page capability on ` +
-        `${saved.href} to tell them what it says.`
-    }
+    await this.nextArticle()
+    return { ok: true, note: '', narrated: true }
   }
 
   // ---------------------------------------------------------------- undo

@@ -31,7 +31,10 @@ const NON_ARTICLE_TEXT_PATTERNS = [
   /^preferences$/i,
   /^see all newsletters$/i,
   /^share your feedback$/i,
-  /start your free trial/i
+  /start your free trial/i,
+  /^live now on\b/i,
+  /©\d{4}/i,
+  /\bthestreet,\s*inc\.?$/i
 ]
 
 const ADDRESS_PATTERN =
@@ -187,10 +190,33 @@ function dropDekBlurbs(links: EmailLink[]): EmailLink[] {
   const kept: EmailLink[] = []
   for (const link of links) {
     const previous = kept[kept.length - 1]
-    if (previous && looksLikeHeadline(previous.text) && !looksLikeHeadline(link.text)) continue
+    // Only drop a sentence-case blurb when it points at the same story as the headline above.
+    // Without the href check, the next article's link looks like a blurb under the prior headline.
+    if (
+      previous &&
+      looksLikeHeadline(previous.text) &&
+      !looksLikeHeadline(link.text) &&
+      sameArticleHref(previous.href, link.href)
+    ) {
+      continue
+    }
     kept.push(link)
   }
   return kept
+}
+
+/** True when two anchors almost certainly target the same page (tracking params ignored). */
+function sameArticleHref(a: string, b: string): boolean {
+  if (a === b) return true
+  const urlA = safeUrl(a)
+  const urlB = safeUrl(b)
+  if (!urlA || !urlB) return false
+  const hostA = urlA.hostname.replace(/^www\./, '')
+  const hostB = urlB.hostname.replace(/^www\./, '')
+  if (hostA !== hostB) return false
+  const pathA = urlA.pathname.replace(/\/$/, '')
+  const pathB = urlB.pathname.replace(/\/$/, '')
+  return pathA.length > 1 && pathA === pathB
 }
 
 const SMALL_WORDS = new Set([

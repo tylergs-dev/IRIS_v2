@@ -9,6 +9,7 @@ import type { VoiceState } from '@shared/types'
 import captureWorkletUrl from './capture.worklet.ts?worklet-url'
 import playerWorkletUrl from './player.worklet.ts?worklet-url'
 import { playEarcon, stopEarcons } from './earcons'
+import { ActivityController } from './activity'
 import { useStore } from '../store'
 
 function workletUrl(path: string): string {
@@ -32,6 +33,7 @@ class AudioBridge {
   private starting: Promise<void> | null = null
   /** Last voice state seen on this graph, so wake/sleep chimes fire only on the asleep boundary. */
   private lastVoiceState: VoiceState | null = null
+  private activity: ActivityController | null = null
 
   async start(): Promise<void> {
     this.starting ??= this.doStart()
@@ -45,6 +47,8 @@ class AudioBridge {
     // while getUserMedia is still opening, and a missed one means the worklet never sends
     // frames while IRIS is asleep.
     this.subscribe()
+    this.activity = new ActivityController(() => this.playbackContext)
+    this.activity.start()
     const [state, health] = await Promise.all([
       window.iris.invoke('voice:getState'),
       window.iris.invoke('health:get')
@@ -166,8 +170,8 @@ class AudioBridge {
   }
 
   /**
-   * Earcons only mark crossing asleep ↔ awake. Listening/thinking/speaking chatter is already
-   * covered by IRIS's own voice, and chiming on every hop would just be noise.
+   * Wake/sleep earcons mark crossing asleep ↔ awake. Working/done earcons (when enabled in
+   * Settings) are handled by ActivityController for task and email silence.
    */
   private onVoiceState(state: VoiceState): void {
     const previous = this.lastVoiceState
@@ -178,6 +182,8 @@ class AudioBridge {
   }
 
   stop(): void {
+    this.activity?.stop()
+    this.activity = null
     stopEarcons(this.playbackContext ?? undefined)
     this.lastVoiceState = null
     for (const track of this.stream?.getTracks() ?? []) track.stop()

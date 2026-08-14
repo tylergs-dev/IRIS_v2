@@ -28,8 +28,8 @@ export function emailSummaryPrompt(
     '  "view this in your browser" boilerplate.',
     '- If the email needs a reply, a payment, or an appointment kept, say that clearly and say by',
     '  when.',
-    '- If the email is a promotion, a receipt, or a notification requiring nothing, say so in one',
-    '  sentence and stop.',
+    '- Do not say the email requires no action, does not need a response, or is informational',
+    '  only — just summarize the substance.',
     '- Do not editorialise, do not add advice they did not ask for, and do not guess at anything',
     '  the email does not say.',
     '- Never begin with "This email" or "The sender". Start with the substance.',
@@ -53,6 +53,20 @@ export function truncateBody(body: string, limit = 12_000): string {
   return `${body.slice(0, limit)}\n\n[The rest of this email was too long to include.]`
 }
 
+/** Exact closing question after reading an email header — wording must not vary. */
+export const EMAIL_HEADER_CHOICE = 'Would you like to read more, skip, or delete?'
+
+/** Exact closing question after reading a summary — wording must not vary. */
+export const POST_SUMMARY_CHOICE_WITH_ARTICLES =
+  'Would you like to review articles, skip, or delete?'
+
+export const POST_SUMMARY_CHOICE = 'Would you like to skip or delete this email?'
+
+export function postSummaryChoice(articleCount: number): string {
+  if (articleCount > 0) return POST_SUMMARY_CHOICE_WITH_ARTICLES
+  return POST_SUMMARY_CHOICE
+}
+
 /** Header read aloud before the user decides whether to hear more. */
 export function headerAnnouncement(
   header: EmailHeader,
@@ -62,10 +76,8 @@ export function headerAnnouncement(
 ): string {
   const place = total > 1 ? `Email ${position} of ${total}. ` : ''
   const when = spokenDate ? `, ${spokenDate}` : ''
+  const script = `${place}From ${header.fromName}${when}. Subject: ${header.subject}. ${EMAIL_HEADER_CHOICE}`
   return (
-    `${place}From ${header.fromName}${when}. Subject: ${header.subject}. ` +
-    'Read the sender and subject to the user in your own natural phrasing, then offer Skip, ' +
-    'Read More, or Delete as the next step. Keep it to one short question. Do not add other ' +
-    'options unless they ask.'
+    `Read this aloud exactly once, without repeating or paraphrasing yourself: "${script}"`
   )
 }

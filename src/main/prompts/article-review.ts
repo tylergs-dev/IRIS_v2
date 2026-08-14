@@ -26,12 +26,48 @@ export function articleExtractionPrompt(links: EmailLink[], senderName: string):
   ].join('\n')
 }
 
+/** Exact closing question during article review — wording must not vary. */
+export const ARTICLE_REVIEW_CHOICE = 'Would you like to save it or skip to the next one?'
+
+/** Spoken once when the browser cannot read an article during review. */
+export function articleSearchFallbackIntro(
+  publisher: string,
+  reason: 'sign_in' | 'blocked' | 'unknown'
+): string {
+  const why =
+    reason === 'sign_in'
+      ? 'it requires a sign-in or subscription'
+      : reason === 'blocked'
+        ? 'the site is blocking automated access'
+        : 'I could not read the page'
+  return (
+    `It looks like I cannot access that article from ${publisher} because ${why}. ` +
+    'I am searching the web for what it was about instead.'
+  )
+}
+
+/** Classify why a publisher page had almost no readable text. */
+export function classifyArticleBlock(text: string): 'sign_in' | 'blocked' | 'unknown' {
+  const sample = text.toLowerCase()
+  if (/\b(sign in|log in|subscribe|subscription|paywall|member(ship)?|premium)\b/.test(sample)) {
+    return 'sign_in'
+  }
+  if (
+    /\b(bot|automated|access denied|blocked|forbidden|captcha|verify you are human)\b/.test(sample)
+  ) {
+    return 'blocked'
+  }
+  return 'unknown'
+}
+
+/** Spoken once when the last article in a newsletter is skipped or saved. */
+export const ARTICLE_REVIEW_COMPLETE = 'That was all of the articles in that newsletter.'
+
 /** Cue for reading one article title during Article Review Mode. */
 export function articleAnnouncement(title: string, index: number, total: number): string {
+  const script = `Article ${index} of ${total}: "${title}". ${ARTICLE_REVIEW_CHOICE}`
   return (
-    `Article ${index} of ${total}: "${title}". Read the title exactly as written, then ask ` +
-    'whether they want to save it, hear about it, or skip to the next one. Keep it to one short ' +
-    'question.'
+    `Read this aloud exactly once, without repeating or paraphrasing yourself: "${script}"`
   )
 }
 

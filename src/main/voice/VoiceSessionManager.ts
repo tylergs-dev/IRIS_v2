@@ -95,6 +95,15 @@ export class VoiceSessionManager {
    */
   private audioCarry: Buffer | null = null
 
+  /**
+   * Injects are serialized: sending a new context message while IRIS is still speaking the last
+   * one makes the server interrupt the turn, which is heard as every response cutting itself off.
+   */
+  private injectQueue: Array<{ channel: ContextChannel; text: string }> = []
+  private injectAwaitingTurn = false
+  private injectRetryTimer: NodeJS.Timeout | null = null
+  private injectQueuedAt = 0
+
   private readonly cost = new CostTracker()
 
   getState(): VoiceState {
@@ -134,6 +143,10 @@ export class VoiceSessionManager {
     this.flushPlayback()
     this.finalizeTurn()
     this.suppressingTurn = false
+    this.injectQueue = []
+    this.injectAwaitingTurn = false
+    if (this.injectRetryTimer) clearTimeout(this.injectRetryTimer)
+    this.injectRetryTimer = null
     this.setState('asleep')
     setHealth('voice', 'offline')
   }
@@ -164,8 +177,40 @@ export class VoiceSessionManager {
    * read, an onboarding cue. Wakes IRIS if needed, because a skill that cannot speak is useless.
    */
   async inject(channel: ContextChannel, text: string): Promise<void> {
+    this.injectQueue.push({ channel, text })
+    if (this.injectQueue.length === 1) this.injectQueuedAt = Date.now()
+    await this.drainInjectQueue()
+  }
+
+  private scheduleInjectRetry(): void {
+    if (this.injectRetryTimer) return
+    this.injectRetryTimer = setTimeout(() => {
+      this.injectRetryTimer = null
+      void this.drainInjectQueue()
+    }, 400)
+  }
+
+  private async drainInjectQueue(): Promise<void> {
     if (!(await this.wake())) return
-    this.session?.sendRealtimeInput({ text: contextMessage(channel, text) })
+
+    const queuedMs = this.injectQueue.length > 0 ? Date.now() - this.injectQueuedAt : 0
+    const stuckThinking =
+      this.state === 'thinking' &&
+      !this.injectAwaitingTurn &&
+      this.injectQueue.length > 0 &&
+      queuedMs > 5000
+
+    if (this.injectAwaitingTurn || this.state === 'speaking' || (this.state === 'thinking' && !stuckThinking)) {
+      if (this.injectQueue.length > 0) this.scheduleInjectRetry()
+      return
+    }
+
+    const next = this.injectQueue.shift()
+    if (!next) return
+    if (this.injectQueue.length > 0) this.injectQueuedAt = Date.now()
+
+    this.injectAwaitingTurn = true
+    this.session?.sendRealtimeInput({ text: contextMessage(next.channel, next.text) })
     this.touchActivity()
   }
 
@@ -416,7 +461,9 @@ export class VoiceSessionManager {
       // already sent over IPC, or stale audio keeps playing after the flush.
       this.flushPlayback()
       this.finalizeTurn()
+      this.injectAwaitingTurn = false
       this.setState('listening')
+      void this.drainInjectQueue()
       return
     }
 
@@ -447,6 +494,8 @@ export class VoiceSessionManager {
       this.suppressingTurn = false
       this.finalizeTurn()
       if (this.state !== 'asleep') this.setState('listening')
+      this.injectAwaitingTurn = false
+      void this.drainInjectQueue()
     }
   }
 
@@ -513,6 +562,9 @@ export class VoiceSessionManager {
     if (this.state === state) return
     this.state = state
     emit('voice:state', state)
+    if (state === 'listening' && this.injectQueue.length > 0) {
+      void this.drainInjectQueue()
+    }
     for (const listener of this.stateListeners) listener(state)
   }
 

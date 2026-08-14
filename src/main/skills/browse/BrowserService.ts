@@ -6,11 +6,17 @@ import { setHealth } from '../../health'
 import { createLogger } from '../../log'
 import { notice } from '../../notify'
 import {
+  articleSearchFallbackIntro,
+  classifyArticleBlock
+} from '../../prompts/article-review'
+import {
   describeSnapshotDiff,
   hostOf,
   nextActionPrompt,
   pageAnswerPrompt
 } from '../../prompts/browse-narration'
+import type { ContextChannel } from '../../prompts/persona'
+import { search } from '../search/TavilyService'
 import { startTask, type Task } from '../tasks'
 import { EXTRACT_LOOSE_TEXT, EXTRACT_READABLE_TEXT } from './page-script'
 
@@ -47,6 +53,15 @@ interface BrowseAction {
   why?: string
 }
 
+interface ReadTaskOptions {
+  /** Exact closing question IRIS must ask after reading the page aloud. */
+  closingQuestion?: string
+  /** Context channel for narration — email when this read is part of article review. */
+  channel?: ContextChannel
+  /** When set, search the web for this topic if the page cannot be read. */
+  articleTitle?: string
+}
+
 class BrowserService {
   private context: BrowserContext | null = null
   private launching: Promise<BrowserContext> | null = null
@@ -56,6 +71,8 @@ class BrowserService {
   private headed = false
   /** Set before we close the context ourselves, so we do not narrate a helper-finished sign-in. */
   private suppressCloseNotice = false
+  /** URLs with a read task already running — a second start would double-narrate the page. */
+  private pendingReadUrls = new Set<string>()
 
   /**
    * A separate browser process, never CDP into IRIS's own window. Process isolation between
@@ -186,13 +203,27 @@ class BrowserService {
     return task.id
   }
 
-  startReadTask(url: string, goal: string): string {
-    const task = startTask('browse', 'browser', `Reading ${hostOf(url)}`)
-    void this.runReadTask(task, url, goal)
+  startReadTask(url: string, goal: string, opts?: ReadTaskOptions): string {
+    if (this.pendingReadUrls.has(url)) {
+      log.info(`read already in flight for ${hostOf(url)}`)
+      return 'duplicate'
+    }
+    this.pendingReadUrls.add(url)
+    const channel = opts?.channel ?? 'browser'
+    const task = startTask('browse', channel, `Reading ${hostOf(url)}`)
+    void this.runReadTask(task, url, goal, opts?.closingQuestion, opts?.articleTitle).finally(() => {
+      this.pendingReadUrls.delete(url)
+    })
     return task.id
   }
 
-  private async runReadTask(task: Task, url: string, goal: string): Promise<void> {
+  private async runReadTask(
+    task: Task,
+    url: string,
+    goal: string,
+    closingQuestion?: string,
+    articleTitle?: string
+  ): Promise<void> {
     this.activeTasks += 1
     let page: Page | null = null
     try {
@@ -210,6 +241,16 @@ class BrowserService {
           chars: text.length,
           snippet: text.slice(0, 180)
         })
+        if (articleTitle && closingQuestion) {
+          await this.readViaSearchFallback(
+            task,
+            articleTitle,
+            page.url(),
+            text,
+            closingQuestion
+          )
+          return
+        }
         await task.fail(
           `There was almost nothing readable on ${hostOf(page.url())}. It may need a subscription, ` +
             'or the page did not finish loading. Say so plainly, and offer to open a sign-in ' +
@@ -219,9 +260,20 @@ class BrowserService {
       }
 
       const answer = await generateText(pageAnswerPrompt(goal, page.url(), text))
-      await task.finish(`Read this aloud naturally, without adding to it: ${answer}`)
+      let finishMsg = `Read this aloud naturally, without adding to it: ${answer}`
+      if (closingQuestion) {
+        finishMsg +=
+          ` When you finish the summary, ask exactly: "${closingQuestion}" ` +
+          'Do not ask any other question.'
+      }
+      await task.finish(finishMsg)
     } catch (error) {
       log.error('read task failed', error)
+      if (articleTitle && closingQuestion && page) {
+        const text = await extractReadableText(page).catch(() => '')
+        await this.readViaSearchFallback(task, articleTitle, page.url(), text, closingQuestion)
+        return
+      }
       await task.fail(
         `I could not read ${hostOf(url)}. Tell the user briefly and offer to try something else.`
       )
@@ -229,6 +281,35 @@ class BrowserService {
       this.activeTasks -= 1
       await page?.close().catch(() => undefined)
       this.touchIdle()
+    }
+  }
+
+  /** Article review fallback when a publisher blocks the headless browser. */
+  private async readViaSearchFallback(
+    task: Task,
+    articleTitle: string,
+    landedUrl: string,
+    pageText: string,
+    closingQuestion: string
+  ): Promise<void> {
+    const publisher = hostOf(landedUrl)
+    const reason = classifyArticleBlock(pageText)
+    const intro = articleSearchFallbackIntro(publisher, reason)
+
+    task.step('Searching the web instead', 0.75)
+    try {
+      const result = await search(articleTitle)
+      await task.finish(
+        `Say exactly once: "${intro}" Then read this summary naturally, without adding to it: ` +
+          `${result.answer} When you finish the summary, ask exactly: "${closingQuestion}" ` +
+          'Do not ask any other question.'
+      )
+    } catch (error) {
+      log.warn('article search fallback failed', error)
+      await task.fail(
+        `${intro} Say that plainly, then offer to open a sign-in window so a helper can log into ` +
+          `${publisher}, or to skip to the next article.`
+      )
     }
   }
 

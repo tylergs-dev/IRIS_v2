@@ -43,6 +43,7 @@ export type IpcContract = {
 
   'reading:list': { args: []; ret: SavedArticle[] }
   'reading:remove': { args: [id: string]; ret: void }
+  'reading:removeAll': { args: []; ret: void }
 
   'auth:googleConnect': { args: []; ret: GoogleAccount }
   'auth:googleDisconnect': { args: []; ret: void }
@@ -118,6 +119,7 @@ export const IPC_CHANNELS = [
   'email:listLabels',
   'reading:list',
   'reading:remove',
+  'reading:removeAll',
   'auth:googleConnect',
   'auth:googleDisconnect',
   'auth:googleStatus',

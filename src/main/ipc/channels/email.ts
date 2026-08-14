@@ -1,5 +1,5 @@
 import { classifyEmailUtterance, emailMode } from '../../skills/SkillOrchestrator'
-import { listArticles, removeArticle } from '../../storage/reading-list'
+import { clearArticles, listArticles, removeArticle } from '../../storage/reading-list'
 import { emit, handle } from '../register'
 
 export function registerEmailChannels(): void {
@@ -20,4 +20,5 @@ export function registerEmailChannels(): void {
 
   handle('reading:list', () => listArticles())
   handle('reading:remove', (id) => removeArticle(id))
+  handle('reading:removeAll', () => clearArticles())
 }

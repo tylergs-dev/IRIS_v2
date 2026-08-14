@@ -23,7 +23,8 @@ const defaults: UserProfile = {
   articleReviewListSeeded: false,
   interests: [],
   notes: null,
-  knownLabels: []
+  knownLabels: [],
+  activitySounds: true
 }
 
 let store: JsonStore<UserProfile> | null = null

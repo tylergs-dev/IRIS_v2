@@ -80,6 +80,8 @@ export interface UserProfile {
    * receipts" can mean without spending a tool call to find out.
    */
   knownLabels: string[]
+  /** Short earcons while IRIS is working on a task. Default on for blind users. */
+  activitySounds: boolean
 }
 
 export type SecretName =
@@ -136,6 +138,8 @@ export interface EmailModeSnapshot {
   articleIndex: number | null
   articleCount: number | null
   canUndo: boolean
+  /** True while fetching, summarizing, or a slow action is in flight. */
+  busy: boolean
 }
 
 export interface SavedArticle {
