@@ -93,6 +93,12 @@ const args = [
   '--outputDir', OUT_DIR
 ]
 
+// Velopack cannot diff individual files over 2 GB (zstd and bsdiff both fail). That happens
+// when a prior Releases/ folder was accidentally packed into app.asar — see electron-builder.yml.
+if (process.env.IRIS_VPK_DELTA === 'none') {
+  args.push('--delta', 'none')
+}
+
 /**
  * Unsigned is the intended default. First install is done with a sighted helper, who clicks
  * through SmartScreen once. Later Velopack updates replace files inside the install directory and

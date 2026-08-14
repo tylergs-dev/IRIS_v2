@@ -10,6 +10,12 @@ files:
   # Everything not bundled by Rollup is required at runtime. electron-builder resolves the
   # production dependency tree itself, so devDependencies are not swept in by this.
   - node_modules/**
+  # Prior vpk output lives here; if it is packed into app.asar the archive exceeds 2 GB and
+  # Velopack cannot build deltas (zstd/bsdiff both cap individual files at 2 GB).
+  - '!Releases/**'
+  - '!release/**'
+  - '!src/**'
+  - '!scripts/**'
 
 # Wake word models, kept outside asar because onnxruntime reads them from a real path. Shipped
 # with the code rather than written to userData: they are part of the app, so it is correct for
@@ -40,6 +46,13 @@ win:
         - x64
   artifactName: ${productName}-${version}-${arch}.${ext}
   files:
+    - out/**
+    - package.json
+    - node_modules/**
+    - '!Releases/**'
+    - '!release/**'
+    - '!src/**'
+    - '!scripts/**'
     # Velopack ships a native binary for every platform it supports; the five we do not run are
     # about 16 MB, which is also 16 MB on every full update download. Listed as exclusions rather
     # than an exclude-all plus a re-include, because a wildcard exclusion cannot be undone by a
@@ -59,6 +72,13 @@ mac:
     - dir
   category: public.app-category.productivity
   files:
+    - out/**
+    - package.json
+    - node_modules/**
+    - '!Releases/**'
+    - '!release/**'
+    - '!src/**'
+    - '!scripts/**'
     - '!node_modules/velopack/lib/native/*_linux_*'
     - '!node_modules/velopack/lib/native/*_win_*'
     - '!node_modules/onnxruntime-node/bin/napi-v6/win32/**'
@@ -67,3 +87,11 @@ mac:
 linux:
   target:
     - dir
+  files:
+    - out/**
+    - package.json
+    - node_modules/**
+    - '!Releases/**'
+    - '!release/**'
+    - '!src/**'
+    - '!scripts/**'
