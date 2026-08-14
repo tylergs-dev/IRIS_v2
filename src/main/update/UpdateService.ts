@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { UpdateManager, type UpdateInfo } from 'velopack'
 import { createLogger } from '../log'
+import { notice } from '../notify'
 import { JsonStore } from '../storage/json-store'
 import { voice } from '../voice/VoiceSessionManager'
 
@@ -87,6 +88,7 @@ class UpdateService {
       const pending = manager.getUpdatePendingRestart()
       if (pending) {
         log.info(`update ${pending.Version} already downloaded, awaiting restart`)
+        if (this.mayAskAbout(pending.Version)) await this.offer(pending.Version)
         return { available: true, version: pending.Version }
       }
 
@@ -113,6 +115,8 @@ class UpdateService {
 
   /** Spoken through the normal voice path so it sounds like IRIS, not like a notification. */
   private async offer(version: string): Promise<void> {
+    // Visible to a sighted helper even if voice is not connected yet.
+    notice('info', `Version ${version} is downloaded and ready to install.`)
     await voice.inject(
       'system',
       `A new version of yourself, ${version}, has finished downloading and is ready to install. ` +
@@ -145,7 +149,8 @@ class UpdateService {
   }
 
   postpone(): void {
-    const version = this.ready?.TargetFullRelease.Version ?? null
+    const version =
+      this.ready?.TargetFullRelease.Version ?? this.getManager()?.getUpdatePendingRestart()?.Version ?? null
     this.getStore().set({
       declinedVersion: version,
       declinedAt: Date.now(),
@@ -155,7 +160,9 @@ class UpdateService {
   }
 
   pendingVersion(): string | null {
-    return this.ready?.TargetFullRelease.Version ?? null
+    return (
+      this.ready?.TargetFullRelease.Version ?? this.getManager()?.getUpdatePendingRestart()?.Version ?? null
+    )
   }
 
   async flush(): Promise<void> {

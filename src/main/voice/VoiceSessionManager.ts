@@ -191,7 +191,10 @@ export class VoiceSessionManager {
   }
 
   private async drainInjectQueue(): Promise<void> {
-    if (!(await this.wake())) return
+    if (!(await this.wake())) {
+      if (this.injectQueue.length > 0) this.scheduleInjectRetry()
+      return
+    }
 
     const queuedMs = this.injectQueue.length > 0 ? Date.now() - this.injectQueuedAt : 0
     const stuckThinking =
