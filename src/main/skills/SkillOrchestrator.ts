@@ -10,10 +10,23 @@ import { browser } from './browse/BrowserService'
 import { EmailModeMachine, type ActionOutcome, type EmailAction } from './email/EmailModeMachine'
 import { gmail } from './email/GmailService'
 import { search } from './search/TavilyService'
+import { STARTING_ACK, startTask } from './tasks'
 
 const log = createLogger('skills')
 
 export const emailMode = new EmailModeMachine((cue) => voice.inject('email', cue))
+
+/**
+ * Actions that wait on Gmail or a model call. Instant ones (repeat, stop, local skips) stay
+ * blocking so the result is the first thing spoken.
+ */
+const SLOW_EMAIL_ACTIONS = new Set<EmailAction['type']>([
+  'readMore',
+  'delete',
+  'move',
+  'openArticle',
+  'saveArticle'
+])
 
 /** Keyword classifier for typed input and UI buttons, so nothing depends on the model. */
 export function classifyEmailUtterance(utterance: string): EmailAction | null {
@@ -47,8 +60,43 @@ function announce(outcome: ActionOutcome): Record<string, unknown> {
   return outcome.ok ? { ok: true, note: outcome.note } : { ok: false, error: outcome.note }
 }
 
+/** Run slow email work after the tool returns so IRIS can speak the ack first. */
+function announceLater(work: () => Promise<ActionOutcome>): Record<string, unknown> {
+  void work()
+    .then(async (outcome) => {
+      emit('email:snapshot', emailMode.snapshot())
+      await voice.inject('email', outcome.note)
+    })
+    .catch((error) => {
+      log.error('background email work failed', error)
+      void voice.inject(
+        'email',
+        'Something went wrong with that email action. Tell them plainly and offer to try again.'
+      )
+    })
+    .finally(() => emailMode.endWork())
+  return { started: true, note: STARTING_ACK }
+}
+
 export async function runStartEmailMode(): Promise<Record<string, unknown>> {
-  return announce(await emailMode.start())
+  const blocked = emailMode.beginFetch()
+  if (blocked) return announce(blocked)
+
+  void emailMode
+    .start()
+    .then(async (outcome) => {
+      emit('email:snapshot', emailMode.snapshot())
+      await voice.inject('email', outcome.note)
+    })
+    .catch((error) => {
+      log.error('background email start failed', error)
+      void voice.inject(
+        'email',
+        'I could not start email mode. Tell the user plainly and offer to try again.'
+      )
+    })
+
+  return { started: true, note: STARTING_ACK }
 }
 
 export function registerEmailSkill(): void {
@@ -107,6 +155,17 @@ export function registerEmailSkill(): void {
     handler: async (args) => {
       const action = toEmailAction(args)
       if (!action) return { ok: false, error: 'I did not catch what to do. Ask them to repeat.' }
+
+      if (SLOW_EMAIL_ACTIONS.has(action.type)) {
+        if (!emailMode.tryBeginWork()) {
+          return {
+            ok: false,
+            error: 'Still working on that. Say so briefly and wait.'
+          }
+        }
+        return announceLater(() => emailMode.handle(action, true))
+      }
+
       return announce(await emailMode.handle(action))
     }
   })
@@ -144,13 +203,33 @@ export function registerEmailSkill(): void {
       name: 'list_email_folders',
       description:
         'List the folders and labels available in the mailbox. Use when the user wants to file an ' +
-        'email but is not sure what folders exist.'
+        'email but is not sure what folders exist. Narrates on its own, so say you are starting ' +
+        'and then wait.'
     },
     handler: async () => {
-      const labels = await gmail.listLabels()
-      return labels.length > 0
-        ? { folders: labels.map((label) => label.name) }
-        : { folders: [], note: 'There are no custom folders in this mailbox yet.' }
+      void gmail
+        .listLabels()
+        .then(async (labels) => {
+          if (labels.length > 0) {
+            await voice.inject(
+              'email',
+              `Their folders are: ${labels.map((label) => label.name).join(', ')}. Read them out.`
+            )
+            return
+          }
+          await voice.inject(
+            'email',
+            'There are no custom folders in this mailbox yet. Say so briefly.'
+          )
+        })
+        .catch((error) => {
+          log.error('list folders failed', error)
+          void voice.inject(
+            'email',
+            'I could not list their folders. Tell them plainly and offer to try again.'
+          )
+        })
+      return { started: true, note: STARTING_ACK }
     }
   })
 
@@ -229,8 +308,8 @@ export function registerResearchSkills(): void {
       name: 'search_web',
       description:
         'Look up a short factual answer on the web with sources. Use for questions like weather, ' +
-        'opening hours, prices, definitions, news, or "what is". This is fast — prefer it over ' +
-        'browsing whenever a short answer will do.',
+        'opening hours, prices, definitions, news, or "what is". Prefer it over browsing whenever ' +
+        'a short answer will do. Narrates on its own, so say you are starting and then wait.',
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -242,25 +321,27 @@ export function registerResearchSkills(): void {
     handler: async (args) => {
       const query = typeof args.query === 'string' ? args.query.trim() : ''
       if (!query) return { error: 'Ask them what they would like me to look up.' }
-      try {
-        const result = await search(query)
-        return {
-          answer: result.answer,
-          sources: result.citations.map((citation) => citation.title),
-          note: 'Summarize this in your own words. Only name a source if the user asks.'
+
+      const task = startTask('search', 'search', query)
+      void search(query).then(
+        (result) =>
+          task.finish(
+            `Summarize this in your own words. Only name a source if the user asks. Answer: ` +
+              `${result.answer}`
+          ),
+        (error: unknown) => {
+          // Degraded mode, spoken rather than silent. Search being down does not mean the web is
+          // unreachable — the browser skill can answer the same question, slower.
+          const detail = error instanceof Error ? error.message : String(error)
+          return task.fail(
+            `Quick search failed (${detail}). Say briefly that quick search is not working, then ` +
+              'offer to look it up the slower way by browsing. If they agree, call browse_web ' +
+              `with the question: ${query}`
+          )
         }
-      } catch (error) {
-        // Degraded mode, spoken rather than silent. Search being down does not mean the web is
-        // unreachable — the browser skill can answer the same question, slower. Offering that is
-        // more use than reporting a failure and stopping.
-        return {
-          error: error instanceof Error ? error.message : String(error),
-          alternative: 'browse_web',
-          note:
-            'Say briefly that quick search is not working, then offer to look it up the slower ' +
-            'way by browsing. If they agree, call browse_web with the same question.'
-        }
-      }
+      )
+
+      return { started: true, note: STARTING_ACK }
     }
   })
 
@@ -296,7 +377,7 @@ export function registerResearchSkills(): void {
       return {
         started: true,
         taskId,
-        note: 'Say in one short sentence that you are looking into it, then wait quietly.'
+        note: STARTING_ACK
       }
     }
   })
@@ -330,7 +411,7 @@ export function registerResearchSkills(): void {
       return {
         started: true,
         taskId,
-        note: 'Say in one short sentence that you are opening it, then wait quietly.'
+        note: STARTING_ACK
       }
     }
   })

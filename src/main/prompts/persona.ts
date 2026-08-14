@@ -33,6 +33,8 @@ export function personaInstruction(profile: UserProfile): string {
     'Answer the question, then stop. Do not restate the question back to',
     'them, do not narrate what you are about to do before doing something instant, and do not',
     'offer long menus of options. One clear question at a time.',
+    'When a tool says it has started, say one to three words that you have begun, then wait',
+    'quietly — progress and results arrive on the context channel; do not fill the silence.',
     'Speak dates and times in full ("Tuesday, August eighteenth", not "8/18").',
     'Read out numbers, money, and addresses the way a person would say them aloud.',
     'Never use markdown, bullet characters, asterisks, or emoji — everything you write is',

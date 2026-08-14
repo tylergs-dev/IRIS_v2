@@ -76,10 +76,55 @@ export class EmailModeMachine {
   /** Running on cached headers because Gmail was unreachable. Nothing may be mutated. */
   private offline = false
 
+  /**
+   * Set while a slow action is in flight outside the phase machine (delete/move), or claimed
+   * before a fire-and-forget tool returns so a second call cannot race the first await.
+   */
+  private inFlight = false
+
+  /** Coalesces concurrent start() calls (voice tool + UI) onto one inbox fetch. */
+  private startPromise: Promise<ActionOutcome> | null = null
+
+  /** Bumped on stop / new beginFetch so a stale inbox fetch cannot overwrite state. */
+  private startGeneration = 0
+
   constructor(private readonly narrate: Narrator) {}
 
   isActive(): boolean {
     return this.phase !== 'idle' && this.phase !== 'exhausted'
+  }
+
+  /** True while fetching the inbox, summarizing, or another slow action has been claimed. */
+  isBusy(): boolean {
+    return this.inFlight || this.phase === 'fetchingQueue' || this.phase === 'summarizing'
+  }
+
+  /**
+   * Claim exclusive work before returning STARTING_ACK from a tool. Returns false when another
+   * slow action is already running.
+   */
+  tryBeginWork(): boolean {
+    if (this.isBusy()) return false
+    this.inFlight = true
+    return true
+  }
+
+  endWork(): void {
+    this.inFlight = false
+  }
+
+  /**
+   * Synchronously enter fetchingQueue so start_email_mode can return an ack before the inbox
+   * fetch begins. Returns an outcome when email mode is already active and start should not run.
+   */
+  beginFetch(): ActionOutcome | null {
+    if (this.isActive()) {
+      return { ok: true, note: 'Email mode is already running. Continue where you left off.' }
+    }
+    this.reset()
+    this.startGeneration += 1
+    this.setPhase('fetchingQueue')
+    return null
   }
 
   snapshot(): EmailModeSnapshot {
@@ -109,17 +154,29 @@ export class EmailModeMachine {
   // ---------------------------------------------------------------- entry point
 
   async start(): Promise<ActionOutcome> {
-    if (this.isActive()) {
-      return { ok: true, note: 'Email mode is already running. Continue where you left off.' }
+    if (this.startPromise) return this.startPromise
+
+    // beginFetch() may already have claimed fetchingQueue for a fire-and-forget tool return.
+    if (this.phase !== 'fetchingQueue') {
+      const blocked = this.beginFetch()
+      if (blocked) return blocked
     }
 
-    this.reset()
-    this.setPhase('fetchingQueue')
+    this.startPromise = this.runStart().finally(() => {
+      this.startPromise = null
+    })
+    return this.startPromise
+  }
 
+  private async runStart(): Promise<ActionOutcome> {
+    const generation = this.startGeneration
     this.offline = false
     try {
       this.queue = await gmail.listPrimaryUnread()
     } catch (error) {
+      if (generation !== this.startGeneration) {
+        return { ok: false, note: 'Left email mode.' }
+      }
       if (error instanceof NotConnectedError) {
         this.setPhase('idle')
         return { ok: false, note: error.message }
@@ -150,6 +207,10 @@ export class EmailModeMachine {
       )
     }
 
+    if (generation !== this.startGeneration) {
+      return { ok: false, note: 'Left email mode.' }
+    }
+
     if (this.queue.length === 0) {
       this.setPhase('exhausted')
       return { ok: true, note: 'There is no unread mail in the primary inbox. Say so briefly.' }
@@ -157,6 +218,9 @@ export class EmailModeMachine {
 
     log.info(`queued ${this.queue.length} unread messages`)
     await this.readCurrentHeader(0)
+    if (generation !== this.startGeneration) {
+      return { ok: false, note: 'Left email mode.' }
+    }
     return {
       ok: true,
       note:
@@ -167,6 +231,8 @@ export class EmailModeMachine {
 
   stop(): ActionOutcome {
     const remaining = Math.max(0, this.queue.length - (this.position + 1))
+    this.inFlight = false
+    this.startGeneration += 1
     this.reset()
     this.setPhase('idle')
     return {
@@ -219,13 +285,27 @@ export class EmailModeMachine {
 
   // ---------------------------------------------------------------- action dispatch
 
-  async handle(action: EmailAction): Promise<ActionOutcome> {
+  async handle(action: EmailAction, alreadyClaimed = false): Promise<ActionOutcome> {
     if (action.type === 'stop') return this.stop()
 
     if (!this.isActive()) {
       return {
         ok: false,
         note: 'Email mode is not running. Offer to start it.'
+      }
+    }
+
+    // Inbox fetch and summarization leave IRIS mute to the tool layer; refuse overlapping work
+    // so a second call cannot race the first. Stop is allowed above. alreadyClaimed is set when
+    // the voice tool claimed inFlight before returning STARTING_ACK.
+    if (
+      this.phase === 'fetchingQueue' ||
+      this.phase === 'summarizing' ||
+      (!alreadyClaimed && this.inFlight)
+    ) {
+      return {
+        ok: false,
+        note: 'Still working on that. Say so briefly and wait.'
       }
     }
 
