@@ -296,7 +296,8 @@ class BrowserService {
     const reason = classifyArticleBlock(pageText)
     const intro = articleSearchFallbackIntro(publisher, reason)
 
-    task.step('Searching the web instead', 0.75)
+    // The finish cue already says she is searching. Speaking this step as well would say it twice.
+    task.step('Searching the web instead', 0.75, false)
     try {
       const result = await search(articleTitle)
       await task.finish(

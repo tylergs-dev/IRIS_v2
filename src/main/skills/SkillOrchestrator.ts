@@ -32,6 +32,8 @@ const SLOW_EMAIL_ACTIONS = new Set<EmailAction['type']>([
 
 const NARRATING_EMAIL_ACTIONS = new Set<EmailAction['type']>([
   'next',
+  'delete',
+  'move',
   'readMore',
   'repeat',
   'saveArticle',
@@ -210,8 +212,8 @@ export function registerEmailSkill(): void {
     },
     handler: async () => {
       const articles = listArticles()
-      await voice.inject('email', readingListAnnouncement(articles))
-      return { ok: true, count: articles.length }
+      // The tool result is the only speech. Injecting as well makes her announce the count twice.
+      return { ok: true, note: readingListAnnouncement(articles) }
     }
   })
 

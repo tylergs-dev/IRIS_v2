@@ -116,7 +116,11 @@ class UpdateService {
   /** Spoken through the normal voice path so it sounds like IRIS, not like a notification. */
   private async offer(version: string): Promise<void> {
     // Visible to a sighted helper even if voice is not connected yet.
-    notice('info', `Version ${version} is downloaded and ready to install.`)
+    // The inject below is the spoken offer. alreadySpoken keeps the helper's notice from
+    // saying the same update a second time.
+    notice('info', `Version ${version} is downloaded and ready to install.`, {
+      alreadySpoken: true
+    })
     await voice.inject(
       'system',
       `A new version of yourself, ${version}, has finished downloading and is ready to install. ` +

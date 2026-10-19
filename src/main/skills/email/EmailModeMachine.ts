@@ -25,6 +25,23 @@ import { undoStack, type UndoEntry } from './undo'
 
 const log = createLogger('email-mode')
 
+/**
+ * End of the inbox is one sentence. A lead (deleted, filed) belongs in that same sentence;
+ * a follow-up cue makes IRIS say the ending, then say the ending again with the lead attached.
+ */
+function throughInboxCue(lead?: string): string {
+  if (!lead) {
+    return (
+      'That was the last unread email. Tell the user they are through the inbox, in one short ' +
+      'sentence, then stop. Say it only once.'
+    )
+  }
+  return (
+    `${lead} That was also the last unread email. Put both facts in one short sentence, say it ` +
+    'only once, then stop. Do not follow it with another sentence.'
+  )
+}
+
 /** What the app tells the voice layer to say. Injected, never spoken by the machine directly. */
 export type Narrator = (cue: string) => Promise<void>
 
@@ -258,7 +275,12 @@ export class EmailModeMachine {
 
   // ---------------------------------------------------------------- progression
 
-  private async readCurrentHeader(position: number): Promise<void> {
+  /**
+   * One spoken turn for the next email, or for the end of the inbox.
+   * `lead` is a fact that belongs in that same turn (the email was just deleted or filed).
+   * A second inject for the same fact makes IRIS say the ending, then say it again.
+   */
+  private async readCurrentHeader(position: number, lead?: string): Promise<void> {
     this.position = position
     this.currentBody = null
     this.articles = []
@@ -268,21 +290,27 @@ export class EmailModeMachine {
     const header = this.current()
     if (!header) {
       this.setPhase('exhausted')
-      await this.narrate(
-        'That was the last unread email. Tell the user they are through the inbox, briefly.'
-      )
+      await this.narrate(throughInboxCue(lead))
       return
     }
 
     this.setPhase('readingHeader')
+    const announcement = headerAnnouncement(
+      header,
+      describeDate(header.date),
+      position + 1,
+      this.queue.length
+    )
     await this.narrate(
-      headerAnnouncement(header, describeDate(header.date), position + 1, this.queue.length)
+      lead
+        ? `${lead} Say that in a few words, then continue straight into the next email. ${announcement}`
+        : announcement
     )
     this.setPhase('awaitingHeaderChoice')
   }
 
-  private async advance(): Promise<void> {
-    await this.readCurrentHeader(this.position + 1)
+  private async advance(lead?: string): Promise<void> {
+    await this.readCurrentHeader(this.position + 1, lead)
   }
 
   // ---------------------------------------------------------------- action dispatch
@@ -366,13 +394,8 @@ export class EmailModeMachine {
       description: `moving the email from ${header.fromName} to the trash`
     })
 
-    await this.advance()
-    return {
-      ok: true,
-      note:
-        'Moved to the trash, recoverable for thirty days. Confirm in a few words and move on. ' +
-        'Do not ask for confirmation.'
-    }
+    await this.advance('The email was moved to the trash.')
+    return { ok: true, note: '', narrated: true }
   }
 
   private async handleMove(labelName: string): Promise<ActionOutcome> {
@@ -392,8 +415,8 @@ export class EmailModeMachine {
         addedLabelId: label.id,
         description: `moving the email from ${header.fromName} to ${label.name}`
       })
-      await this.advance()
-      return { ok: true, note: `Moved to ${label.name}. Confirm briefly and move on.` }
+      await this.advance(`The email was filed under ${label.name}.`)
+      return { ok: true, note: '', narrated: true }
     } catch (error) {
       log.error('move failed', error)
       return { ok: false, note: 'I could not move that email. Say so and offer to try again.' }
@@ -531,10 +554,8 @@ export class EmailModeMachine {
   private async finishArticleReview(): Promise<ActionOutcome> {
     this.articles = []
     this.articleIndex = -1
-    await this.narrate(
-      `Say exactly once, without adding anything: "${ARTICLE_REVIEW_COMPLETE}"`
-    )
-    await this.advance()
+    // One cue: the articles are done, and either the next email or the end of the inbox.
+    await this.advance(ARTICLE_REVIEW_COMPLETE)
     return { ok: true, note: '', narrated: true }
   }
 

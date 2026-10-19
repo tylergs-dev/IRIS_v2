@@ -5,7 +5,7 @@ import { createLogger } from '../log'
 import { gmail } from '../skills/email/GmailService'
 import { browser } from '../skills/browse/BrowserService'
 import { runStartEmailMode } from '../skills/SkillOrchestrator'
-import { startTask } from '../skills/tasks'
+import { SILENT_ACK, startTask } from '../skills/tasks'
 import { getProfile, setProfile } from '../storage/profile'
 import { secretsPresence } from '../storage/secrets'
 import { registerTool } from '../voice/tools'
@@ -120,13 +120,8 @@ export function registerSettingsTools(): void {
         }
       )
 
-      return {
-        started: true,
-        note:
-          'Tell them a browser window is opening so a helper can sign into their subscription ' +
-          'sites. This is the same kind of helper step as Gmail. Say you will confirm when the ' +
-          'window is ready, then wait quietly.'
-      }
+      // The finish line is the one explanation. A tool note here would say the same thing first.
+      return { started: true, note: SILENT_ACK }
     }
   })
 

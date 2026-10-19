@@ -43,6 +43,9 @@ export class Task {
   ) {
     log.info(`start ${skill}: ${title}`)
     displayedTaskId = this.id
+    // The tool's starting acknowledgement is the first thing spoken. An opening progress
+    // line in that same moment would be a second cue for the same start.
+    this.lastInjectedAt = Date.now()
     this.publish()
   }
 
@@ -60,12 +63,15 @@ export class Task {
     emit('task:update', status)
   }
 
-  /** Routine progress. Always shown in the panel; spoken at most every few seconds. */
-  step(message: string, progress?: number): void {
+  /**
+   * Routine progress. Always shown in the panel; spoken at most every few seconds.
+   * `speak: false` is for a line the result cue will already say.
+   */
+  step(message: string, progress?: number, speak = true): void {
     this.steps.push(message)
     if (progress !== undefined) this.progress = progress
     this.publish()
-    this.throttledInject(message)
+    if (speak) this.throttledInject(message)
   }
 
   /** Something the user must hear, such as a result or a failure. Never throttled. */
