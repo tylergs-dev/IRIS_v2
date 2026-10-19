@@ -10,7 +10,8 @@ const log = createLogger('text-model')
  * 12 KB newsletter through it would be both slow and expensive.
  *
  * There is no `gemini-3.1-flash` on generateContent — that id 404s. The 3.1 Flash text model is
- * `gemini-3.1-flash-lite`; the Live sibling stays `gemini-3.1-flash-live-preview`.
+ * `gemini-3.1-flash-lite`. Voice runs separately on `gemini-3.8-live` (see session-config.ts),
+ * which is Live-only and does not serve generateContent.
  */
 export const TEXT_MODEL = 'gemini-3.1-flash-lite'
 

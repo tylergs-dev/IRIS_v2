@@ -3,7 +3,7 @@ import {
   EndSensitivity,
   Modality,
   StartSensitivity,
-  ThinkingLevel,
+  TurnCoverage,
   type LiveConnectConfig
 } from '@google/genai'
 import type { UserProfile } from '../../shared/types'
@@ -11,11 +11,13 @@ import { DEFAULT_VOICE, isVoiceName } from '../../shared/voices'
 import { personaInstruction } from '../prompts/persona'
 
 /**
- * Pinned deliberately. Every Live model is Preview with a two-week deprecation floor, so this
- * is the single place to change when Google moves. `gemini-3.1-pro-preview` is text-only and
- * will not connect here.
+ * Pinned deliberately, and the single place to change when Google moves. `gemini-3.8-live` is
+ * the stable low-latency Live model; its Extended Thinking sibling reasons in the background
+ * and reports idleness through `interactionStatus` rather than `turnComplete`, so switching to
+ * it would mean reworking the state machine in VoiceSessionManager. `gemini-3.1-pro-preview` is
+ * text-only and will not connect here.
  */
-export const LIVE_MODEL = 'gemini-3.1-flash-live-preview'
+export const LIVE_MODEL = 'gemini-3.8-live'
 
 /** Connections are severed around the 10 minute mark regardless of session config. */
 export const CONNECTION_LIFETIME_MS = 10 * 60 * 1000
@@ -70,12 +72,17 @@ export function buildSessionConfig({
         // Below ~500ms utterances fragment and transcription quality measurably drops.
         silenceDurationMs: 700
       },
-      activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS
+      activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+      // 3.8 defaults to TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO. IRIS never sends video, and
+      // the renderer already gates uploads to speech, so a turn is speech activity and nothing
+      // else.
+      turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY
     },
 
-    // Conversational latency matters more than reasoning depth here; the hard thinking happens
-    // in separate non-live calls for summarization.
-    thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+    // No thinkingConfig: `gemini-3.8-live` rejects `thinkingLevel` at setup. Its interleaved
+    // reasoning is always on and not tunable. The hard thinking happens in separate non-live
+    // calls for summarization. Proactive audio is likewise permanently on and affective dialogue
+    // has been removed from the API, so neither is set here.
 
     ...(tools && tools.length > 0 ? { tools } : {})
   }

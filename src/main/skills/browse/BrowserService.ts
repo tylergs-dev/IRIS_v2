@@ -194,7 +194,7 @@ class BrowserService {
   }
 
   /**
-   * Fire-and-forget. Gemini 3.1 Live blocks on tool calls, so the tool returns a task id in
+   * Fire-and-forget. Tools are registered as blocking, so the tool returns a task id in
    * milliseconds and this runs on its own, narrating as it goes.
    */
   startBrowseTask(goal: string, startUrl?: string): string {

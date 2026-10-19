@@ -8,8 +8,9 @@ import { voice } from '../voice/VoiceSessionManager'
 const log = createLogger('task')
 
 /**
- * Gemini Live cannot speak until a tool handler returns. Slow skills return this note immediately
- * so IRIS acknowledges in a few words, then narrate progress over the context channel.
+ * Tools are blocking, so Gemini Live cannot speak until a handler returns. Slow skills return
+ * this note immediately so IRIS acknowledges in a few words, then narrate progress over the
+ * context channel.
  */
 export const STARTING_ACK =
   'Say only one to three words that you have started, then wait quietly. Do not explain.'

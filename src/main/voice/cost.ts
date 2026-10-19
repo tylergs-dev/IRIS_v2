@@ -2,7 +2,7 @@ import { MediaModality, type UsageMetadata } from '@google/genai'
 import type { CostEstimate } from '../../shared/types'
 
 /**
- * List prices per million tokens for gemini-3.1-flash-live-preview. Rough by design — the point
+ * List prices per million tokens for gemini-3.8-live. Rough by design — the point
  * is to make a long session's cost visible rather than to bill accurately, because the Live API
  * reprocesses accumulated audio context every turn and real spend grows faster than wall time.
  */

@@ -51,9 +51,9 @@ export function registerSettingsTools(): void {
         return runStartEmailMode()
       }
 
-      // Deliberately not awaited: the browser flow can take a minute or more, and Gemini 3.1 has
-      // no non-blocking function calling, so awaiting here would leave IRIS mute throughout the
-      // one part of setup where the user most needs to be told what is happening. The outcome is
+      // Deliberately not awaited: the browser flow can take a minute or more, and tools are
+      // registered as blocking, so awaiting here would leave IRIS mute throughout the one part
+      // of setup where the user most needs to be told what is happening. The outcome is
       // narrated instead, because otherwise they would be left in a browser with no idea whether
       // signing in had worked.
       const task = startTask('onboarding', 'system', 'Connecting Gmail')

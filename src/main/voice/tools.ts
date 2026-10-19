@@ -1,4 +1,4 @@
-import { Type, type FunctionDeclaration } from '@google/genai'
+import { Behavior, Type, type FunctionDeclaration } from '@google/genai'
 import type { CostEstimate } from '../../shared/types'
 import { getHealth } from '../health'
 import { createLogger } from '../log'
@@ -9,9 +9,9 @@ const log = createLogger('tools')
 export interface ToolDefinition {
   declaration: FunctionDeclaration
   /**
-   * Must resolve fast. Gemini 3.1 Live has no non-blocking function calling, so the model
-   * cannot speak until this returns — anything slow has to start work in the background and
-   * report progress through the context channel instead.
+   * Must resolve fast. Every tool is registered as BLOCKING, so the model cannot speak until
+   * this returns — anything slow has to start work in the background and report progress
+   * through the context channel instead.
    */
   handler: (args: Record<string, unknown>) => Promise<Record<string, unknown>>
 }
@@ -21,7 +21,15 @@ const tools = new Map<string, ToolDefinition>()
 export function registerTool(definition: ToolDefinition): void {
   const name = definition.declaration.name
   if (!name) throw new Error('Tool declaration requires a name')
-  tools.set(name, definition)
+  // Pinned to BLOCKING on purpose. Gemini 3.8 Live defaults to NON_BLOCKING, where the model
+  // keeps talking while a tool runs and results carry a scheduling hint. The skills here were
+  // built the other way round: a handler returns in milliseconds with a short acknowledgement,
+  // then narrates through the context channel. Letting the model speak over that would double
+  // up every acknowledgement.
+  tools.set(name, {
+    ...definition,
+    declaration: { ...definition.declaration, behavior: Behavior.BLOCKING }
+  })
 }
 
 export function toolDeclarations(): FunctionDeclaration[] {

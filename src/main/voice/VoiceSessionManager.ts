@@ -166,8 +166,9 @@ export class VoiceSessionManager {
     this.touchActivity()
 
     if (!(await this.wake())) return
-    // sendClientContent is restricted to seeding history on 3.1; live turns must use
-    // sendRealtimeInput even for text.
+    // Kept on sendRealtimeInput rather than sendClientContent. 3.8 accepts client content for
+    // the whole session, but `turnComplete: true` cuts off whatever IRIS is saying, and without
+    // it the server waits for more before answering. Realtime text behaves like speech.
     this.session?.sendRealtimeInput({ text: trimmed })
     this.setState('thinking')
   }
@@ -481,7 +482,7 @@ export class VoiceSessionManager {
         this.appendTranscript('iris', content.outputTranscription.text)
       }
 
-      // A single 3.1 event can carry several parts at once; iterating only the first would
+      // A single Live event can carry several parts at once; iterating only the first would
       // silently drop audio.
       for (const part of content.modelTurn?.parts ?? []) {
         if (part.inlineData?.data) {
