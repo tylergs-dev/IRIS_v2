@@ -8,12 +8,17 @@ const log = createLogger('ipc')
 
 const registered = new Set<IpcChannel>()
 
-let target: WebContents | null = null
+/**
+ * Every live renderer that should receive pushes, with an optional allow-list of events. The main
+ * window takes everything; a helper window such as the inbox popout opts into the few it draws,
+ * so the mic and speaker PCM streams are not cloned across to a document that will drop them.
+ */
+const targets = new Map<WebContents, ReadonlySet<IpcEventName> | null>()
 
-export function setRendererTarget(contents: WebContents): void {
-  target = contents
+export function addRendererTarget(contents: WebContents, only?: readonly IpcEventName[]): void {
+  targets.set(contents, only ? new Set(only) : null)
   contents.once('destroyed', () => {
-    if (target === contents) target = null
+    targets.delete(contents)
   })
 }
 
@@ -68,6 +73,9 @@ export function registerFallbacks(): void {
 }
 
 export function emit<E extends IpcEventName>(event: E, payload: IpcEvents[E]): void {
-  if (!target || target.isDestroyed()) return
-  target.send(event, payload)
+  for (const [contents, only] of targets) {
+    if (contents.isDestroyed()) continue
+    if (only && !only.has(event)) continue
+    contents.send(event, payload)
+  }
 }

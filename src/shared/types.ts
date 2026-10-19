@@ -129,12 +129,24 @@ export type EmailModePhase =
   | 'articleReview'
   | 'exhausted'
 
+/** The on-screen fallbacks for email mode; everything else stays voice-only. */
+export type EmailUiAction = 'readMore' | 'next' | 'delete' | 'stop'
+
+/** What happened to a message the queue has already moved past. */
+export type EmailDisposition = 'skipped' | 'read' | 'deleted' | 'moved'
+
 export interface EmailModeSnapshot {
   phase: EmailModePhase
   /** Index into the queue of the message being handled, or null when none. */
   position: number | null
   queueLength: number
   current: EmailHeader | null
+  /** The whole fetched queue, in reading order, so the inbox view can show more than one row. */
+  queue: EmailHeader[]
+  /** Outcome per message id for rows already handled; rows not present are still waiting. */
+  dispositions: Record<string, EmailDisposition>
+  /** Running on cached headers because Gmail was unreachable; nothing can be mutated. */
+  offline: boolean
   articleIndex: number | null
   articleCount: number | null
   canUndo: boolean

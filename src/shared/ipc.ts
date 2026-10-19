@@ -2,6 +2,7 @@ import type {
   ChatMessage,
   CostEstimate,
   EmailModeSnapshot,
+  EmailUiAction,
   GoogleAccount,
   LabelInfo,
   SavedArticle,
@@ -37,6 +38,12 @@ export type IpcContract = {
 
   'email:start': { args: []; ret: void }
   'email:choose': { args: [utterance: string]; ret: void }
+  /**
+   * A button in the inbox view. Runs through the same machine and narration as the voice tool,
+   * so pressing Delete sounds exactly like saying it. Resolves once the action has been accepted
+   * or refused, not when the slow work (summary, trash) finishes — the snapshot reports that.
+   */
+  'email:action': { args: [action: EmailUiAction]; ret: { ok: boolean } }
   'email:undoLast': { args: []; ret: { ok: boolean; description: string } }
   'email:getSnapshot': { args: []; ret: EmailModeSnapshot }
   'email:listLabels': { args: []; ret: LabelInfo[] }
@@ -114,6 +121,7 @@ export const IPC_CHANNELS = [
   'voice:micProblem',
   'email:start',
   'email:choose',
+  'email:action',
   'email:undoLast',
   'email:getSnapshot',
   'email:listLabels',

@@ -1,7 +1,8 @@
-import { BrowserWindow, protocol, session, shell } from 'electron'
+import { BrowserWindow, protocol, screen, session, shell } from 'electron'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { setRendererTarget } from './ipc/register'
+import type { IpcEventName } from '../shared/ipc'
+import { addRendererTarget } from './ipc/register'
 import { createLogger } from './log'
 import { APP_ORIGIN, isTrustedUrl } from './security'
 
@@ -9,6 +10,34 @@ const log = createLogger('window')
 
 const RENDERER_ROOT = path.join(__dirname, '../renderer')
 const PRELOAD = path.join(__dirname, '../preload/index.js')
+
+/**
+ * The renderer bundle is one document; the hash picks which root it mounts. `#inbox` is the
+ * email popout. See `src/renderer/main.tsx`.
+ */
+export const INBOX_HASH = '#inbox'
+
+/** The only pushes the inbox popout draws. Everything else — above all audio — stays home. */
+const INBOX_EVENTS: readonly IpcEventName[] = [
+  'email:snapshot',
+  'auth:changed',
+  'health:changed',
+  'voice:state'
+]
+
+const WEB_PREFERENCES: Electron.WebPreferences = {
+  preload: PRELOAD,
+  contextIsolation: true,
+  sandbox: true,
+  nodeIntegration: false,
+  webSecurity: true
+}
+
+let mainWindow: BrowserWindow | null = null
+
+export function getMainWindow(): BrowserWindow | null {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+}
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -140,9 +169,21 @@ function forwardRendererDiagnostics(contents: Electron.WebContents): void {
   })
 }
 
+/** Dev server or the packaged `app://` document, with an optional hash to pick the root. */
+function rendererUrl(hash = ''): string {
+  const devUrl = process.env.ELECTRON_RENDERER_URL
+  return (devUrl ?? `${APP_ORIGIN}/index.html`) + hash
+}
+
+let protocolReady = false
+
 export function createMainWindow(): BrowserWindow {
-  handleAppProtocol()
-  configurePermissions()
+  // Both are process-wide; `activate` on macOS can create the window more than once.
+  if (!protocolReady) {
+    handleAppProtocol()
+    configurePermissions()
+    protocolReady = true
+  }
 
   const window = new BrowserWindow({
     width: 1180,
@@ -153,24 +194,67 @@ export function createMainWindow(): BrowserWindow {
     backgroundColor: '#05070d',
     title: 'IRIS',
     autoHideMenuBar: true,
-    webPreferences: {
-      preload: PRELOAD,
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false,
-      webSecurity: true
-    }
+    webPreferences: WEB_PREFERENCES
   })
 
   lockDownNavigation(window.webContents)
-  setRendererTarget(window.webContents)
+  addRendererTarget(window.webContents)
+  forwardRendererDiagnostics(window.webContents)
+
+  window.once('ready-to-show', () => window.show())
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null
+  })
+
+  void window.loadURL(rendererUrl())
+
+  mainWindow = window
+  return window
+}
+
+/**
+ * Where to put the popout: beside the main window when the display has room, otherwise
+ * overlapping its right edge so it is still obviously attached to IRIS.
+ */
+function inboxBounds(parent: BrowserWindow, width: number, height: number): Electron.Rectangle {
+  const anchor = parent.getBounds()
+  const area = screen.getDisplayMatching(anchor).workArea
+  const gap = 12
+
+  let x = anchor.x + anchor.width + gap
+  if (x + width > area.x + area.width) x = Math.max(area.x, area.x + area.width - width)
+  const y = Math.min(Math.max(anchor.y, area.y), area.y + area.height - height)
+  return { x, y, width, height }
+}
+
+/**
+ * The email-mode inbox as its own window, so a sighted helper can keep it beside the
+ * conversation or on another screen. A child of the main window: it rides along when that moves,
+ * minimises with it, and closes with it. Not modal — the main window stays usable.
+ */
+export function createInboxWindow(parent: BrowserWindow): BrowserWindow {
+  const width = 780
+  const height = 580
+
+  const window = new BrowserWindow({
+    ...inboxBounds(parent, width, height),
+    minWidth: 560,
+    minHeight: 400,
+    parent,
+    show: false,
+    backgroundColor: '#05070d',
+    title: 'IRIS — Inbox',
+    autoHideMenuBar: true,
+    webPreferences: WEB_PREFERENCES
+  })
+
+  lockDownNavigation(window.webContents)
+  addRendererTarget(window.webContents, INBOX_EVENTS)
   forwardRendererDiagnostics(window.webContents)
 
   window.once('ready-to-show', () => window.show())
 
-  const devUrl = process.env.ELECTRON_RENDERER_URL
-  if (devUrl) void window.loadURL(devUrl)
-  else void window.loadURL(`${APP_ORIGIN}/index.html`)
+  void window.loadURL(rendererUrl(INBOX_HASH))
 
   return window
 }

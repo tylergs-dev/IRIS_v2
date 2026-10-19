@@ -10,6 +10,7 @@ import { registerSystemChannels } from './ipc/channels/system'
 import { registerUpdateChannels } from './ipc/channels/update'
 import { registerVoiceChannels } from './ipc/channels/voice'
 import { registerFallbacks } from './ipc/register'
+import { installInboxWindow } from './inbox-window'
 import { createLogger } from './log'
 import { notice, setNoticeSpeaker } from './notify'
 import { gmail } from './skills/email/GmailService'
@@ -25,7 +26,7 @@ import { assertStorageSecure } from './storage/secrets'
 import { updates } from './update/UpdateService'
 import { voice } from './voice/VoiceSessionManager'
 import { startWakeWord } from './wake'
-import { createMainWindow, registerAppScheme } from './window'
+import { createMainWindow, getMainWindow, registerAppScheme } from './window'
 
 const log = createLogger('main')
 
@@ -35,7 +36,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    const [window] = BrowserWindow.getAllWindows()
+    const window = getMainWindow() ?? BrowserWindow.getAllWindows()[0]
     if (!window) return
     if (window.isMinimized()) window.restore()
     window.focus()
@@ -76,6 +77,7 @@ async function bootstrap(): Promise<void> {
   updates.countLaunch()
 
   const window = createMainWindow()
+  installInboxWindow()
 
   window.webContents.once('did-finish-load', () => {
     if (!storageSecure) {
@@ -99,7 +101,7 @@ async function bootstrap(): Promise<void> {
   void startWakeWord()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+    if (!getMainWindow()) createMainWindow()
   })
 }
 

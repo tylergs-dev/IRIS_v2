@@ -116,6 +116,38 @@ export async function runStartEmailMode(): Promise<Record<string, unknown>> {
   return { started: true, note: STARTING_ACK }
 }
 
+/**
+ * One dispatch for every way an email action can arrive — the voice tool and the inbox buttons.
+ * Slow actions are claimed and run after return so IRIS can speak an ack first; quick ones are
+ * answered inline. Either way the outcome reaches the user's ear through the same narration.
+ */
+export async function runEmailAction(action: EmailAction): Promise<Record<string, unknown>> {
+  if (SLOW_EMAIL_ACTIONS.has(action.type)) {
+    if (!emailMode.tryBeginWork()) {
+      return { ok: false, error: 'Still working on that. Say so briefly and wait.' }
+    }
+    const ack = NARRATING_EMAIL_ACTIONS.has(action.type) ? SILENT_ACK : STARTING_ACK
+    return announceLater(() => emailMode.handle(action, true), ack)
+  }
+
+  return announce(await emailMode.handle(action))
+}
+
+/**
+ * The inbox buttons have no model turn to carry the outcome, so a refusal ("still working",
+ * "nothing open") or a quick result ("left email mode") is spoken directly. Slow actions narrate
+ * on their own through announceLater.
+ */
+export async function runEmailUiAction(action: EmailAction): Promise<{ ok: boolean }> {
+  const result = await runEmailAction(action)
+  const note = typeof result.error === 'string' ? result.error : result.note
+  const started = result.started === true
+  if (!started && typeof note === 'string' && note.trim()) {
+    void voice.inject('email', note)
+  }
+  return { ok: result.ok !== false }
+}
+
 export function registerEmailSkill(): void {
   registerTool({
     declaration: {
@@ -171,19 +203,7 @@ export function registerEmailSkill(): void {
     handler: async (args) => {
       const action = toEmailAction(args)
       if (!action) return { ok: false, error: 'I did not catch what to do. Ask them to repeat.' }
-
-      if (SLOW_EMAIL_ACTIONS.has(action.type)) {
-        if (!emailMode.tryBeginWork()) {
-          return {
-            ok: false,
-            error: 'Still working on that. Say so briefly and wait.'
-          }
-        }
-        const ack = NARRATING_EMAIL_ACTIONS.has(action.type) ? SILENT_ACK : STARTING_ACK
-        return announceLater(() => emailMode.handle(action, true), ack)
-      }
-
-      return announce(await emailMode.handle(action))
+      return runEmailAction(action)
     }
   })
 

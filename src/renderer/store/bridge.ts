@@ -39,3 +39,29 @@ async function hydrate(): Promise<void> {
   ])
   useStore.setState({ messages, profile, health, keys })
 }
+
+/**
+ * The inbox popout's bridge. Main only forwards it the events it draws (see INBOX_EVENTS in the
+ * main process), and it has its own store, so it hydrates the little it needs itself.
+ */
+export function connectInboxBridge(): () => void {
+  const off: Array<() => void> = []
+
+  off.push(window.iris.on('email:snapshot', (email) => useStore.setState({ email })))
+  off.push(window.iris.on('auth:changed', (account) => useStore.setState({ account })))
+  off.push(window.iris.on('health:changed', (health) => useStore.setState({ health })))
+  off.push(window.iris.on('voice:state', (voiceState) => useStore.setState({ voiceState })))
+
+  void Promise.all([
+    window.iris.invoke('email:getSnapshot'),
+    window.iris.invoke('auth:googleStatus'),
+    window.iris.invoke('health:get'),
+    window.iris.invoke('voice:getState')
+  ]).then(([email, account, health, voiceState]) =>
+    useStore.setState({ email, account, health, voiceState })
+  )
+
+  return () => {
+    for (const unsubscribe of off) unsubscribe()
+  }
+}

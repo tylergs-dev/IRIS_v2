@@ -1,5 +1,6 @@
 import type {
   EmailBody,
+  EmailDisposition,
   EmailHeader,
   EmailLink,
   EmailModePhase,
@@ -70,6 +71,8 @@ export class EmailModeMachine {
   private phase: EmailModePhase = 'idle'
   private queue: EmailHeader[] = []
   private position = -1
+  /** What became of each message the queue has moved past, for the inbox view. */
+  private dispositions: Record<string, EmailDisposition> = {}
 
   private currentBody: EmailBody | null = null
   private articles: ArticleCandidate[] = []
@@ -92,7 +95,17 @@ export class EmailModeMachine {
   /** Bumped on stop / new beginFetch so a stale inbox fetch cannot overwrite state. */
   private startGeneration = 0
 
+  /** Told on every phase change; the inbox window opens and closes on these. */
+  private readonly phaseListeners = new Set<(phase: EmailModePhase) => void>()
+
   constructor(private readonly narrate: Narrator) {}
+
+  onPhaseChange(listener: (phase: EmailModePhase) => void): () => void {
+    this.phaseListeners.add(listener)
+    return () => {
+      this.phaseListeners.delete(listener)
+    }
+  }
 
   isActive(): boolean {
     return this.phase !== 'idle' && this.phase !== 'exhausted'
@@ -141,6 +154,9 @@ export class EmailModeMachine {
       position: current ? this.position + 1 : null,
       queueLength: this.queue.length,
       current: current ?? null,
+      queue: this.queue,
+      dispositions: { ...this.dispositions },
+      offline: this.offline,
       articleIndex: this.articleIndex >= 0 ? this.articleIndex + 1 : null,
       articleCount: this.articles.length > 0 ? this.articles.length : null,
       canUndo: undoStack.canUndo(),
@@ -148,14 +164,29 @@ export class EmailModeMachine {
     }
   }
 
+  /**
+   * Records the outcome for the current message before the queue moves past it. "read" is only
+   * noted when nothing stronger has been recorded, so a delete after a summary still says deleted.
+   */
+  private dispose(disposition: EmailDisposition): void {
+    const header = this.current()
+    if (!header) return
+    if (disposition === 'read' && this.dispositions[header.id]) return
+    this.dispositions[header.id] = disposition
+  }
+
   private current(): EmailHeader | undefined {
     return this.queue[this.position]
   }
 
   private setPhase(phase: EmailModePhase): void {
-    if (this.phase !== phase) log.info(`${this.phase} -> ${phase}`)
+    const changed = this.phase !== phase
+    if (changed) log.info(`${this.phase} -> ${phase}`)
     this.phase = phase
     emit('email:snapshot', this.snapshot())
+    if (changed) {
+      for (const listener of this.phaseListeners) listener(phase)
+    }
   }
 
   // ---------------------------------------------------------------- entry point
@@ -249,6 +280,7 @@ export class EmailModeMachine {
   private reset(): void {
     this.queue = []
     this.position = -1
+    this.dispositions = {}
     this.currentBody = null
     this.articles = []
     this.articleIndex = -1
@@ -344,6 +376,7 @@ export class EmailModeMachine {
   private async handleNext(): Promise<ActionOutcome> {
     if (this.phase === 'articleReview') return this.handleArticleAction('skipArticle')
     // Skipping deliberately leaves the message unread, so it is still waiting next time.
+    this.dispose('skipped')
     await this.advance()
     return { ok: true, note: '', narrated: true }
   }
@@ -366,6 +399,7 @@ export class EmailModeMachine {
       description: `moving the email from ${header.fromName} to the trash`
     })
 
+    this.dispose('deleted')
     await this.advance()
     return {
       ok: true,
@@ -392,6 +426,7 @@ export class EmailModeMachine {
         addedLabelId: label.id,
         description: `moving the email from ${header.fromName} to ${label.name}`
       })
+      this.dispose('moved')
       await this.advance()
       return { ok: true, note: `Moved to ${label.name}. Confirm briefly and move on.` }
     } catch (error) {
@@ -438,6 +473,7 @@ export class EmailModeMachine {
       this.currentBody = body
       // Opening an email is the point at which it has genuinely been read.
       await gmail.markRead(header.id).catch((error) => log.warn('markRead failed', error))
+      this.dispose('read')
     } catch (error) {
       log.error('could not fetch the body', error)
       this.setPhase('awaitingHeaderChoice')
