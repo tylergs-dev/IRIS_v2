@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
@@ -10,6 +11,10 @@ const shared = resolve('src/shared')
  * environment, so an env lookup in the shipped binary would always be empty.
  */
 const updateFeed = JSON.stringify(process.env.IRIS_UPDATE_FEED ?? '')
+
+const appVersion = JSON.stringify(
+  (JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as { version: string }).version
+)
 
 export default defineConfig({
   main: {
@@ -33,6 +38,7 @@ export default defineConfig({
   },
   renderer: {
     root: 'src/renderer',
+    define: { __IRIS_VERSION__: appVersion },
     plugins: [audioWorklet(), react()],
     resolve: {
       alias: { '@shared': shared, '@renderer': resolve('src/renderer') }

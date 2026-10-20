@@ -103,6 +103,7 @@ export function App(): React.JSX.Element {
               {cost.estimatedUsd.toFixed(3)}
             </span>
           ) : null}
+          <span className="app-version">Version {__IRIS_VERSION__}</span>
         </div>
       </nav>
 

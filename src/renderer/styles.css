@@ -182,6 +182,11 @@ button {
   color: var(--text-faint);
 }
 
+.app-version {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
 .health {
   display: flex;
   flex-direction: column;
