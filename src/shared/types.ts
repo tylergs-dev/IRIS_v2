@@ -30,6 +30,14 @@ export type SpeechPace = 'slow' | 'normal' | 'fast'
 export type SummaryLength = 'short' | 'detailed'
 
 /**
+ * Which unread mail email mode reads.
+ * - `primary`: the Primary tab only — what Gmail shows under Inbox when tabs are on. Excludes
+ *   Social, Promotions, Updates and Forums. This is the default.
+ * - `inbox`: every unread message with the INBOX label, including the other tabs.
+ */
+export type InboxScope = 'primary' | 'inbox'
+
+/**
  * The five questions worth asking before the user has seen the app work. Everything else in the
  * spec's list is more useful offered later, once they know what IRIS does.
  */
@@ -82,6 +90,7 @@ export interface UserProfile {
   knownLabels: string[]
   /** Short earcons while IRIS is working on a task. Default on for blind users. */
   activitySounds: boolean
+  inboxScope: InboxScope
 }
 
 export type SecretName =
@@ -129,12 +138,24 @@ export type EmailModePhase =
   | 'articleReview'
   | 'exhausted'
 
+/** The on-screen fallbacks for email mode; everything else stays voice-only. */
+export type EmailUiAction = 'readMore' | 'next' | 'delete' | 'stop'
+
+/** What happened to a message the queue has already moved past. */
+export type EmailDisposition = 'skipped' | 'read' | 'deleted' | 'moved'
+
 export interface EmailModeSnapshot {
   phase: EmailModePhase
   /** Index into the queue of the message being handled, or null when none. */
   position: number | null
   queueLength: number
   current: EmailHeader | null
+  /** The whole fetched queue, in reading order, so the inbox view can show more than one row. */
+  queue: EmailHeader[]
+  /** Outcome per message id for rows already handled; rows not present are still waiting. */
+  dispositions: Record<string, EmailDisposition>
+  /** Running on cached headers because Gmail was unreachable; nothing can be mutated. */
+  offline: boolean
   articleIndex: number | null
   articleCount: number | null
   canUndo: boolean

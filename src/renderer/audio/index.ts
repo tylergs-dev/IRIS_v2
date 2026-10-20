@@ -34,6 +34,13 @@ class AudioBridge {
   /** Last voice state seen on this graph, so wake/sleep chimes fire only on the asleep boundary. */
   private lastVoiceState: VoiceState | null = null
   private activity: ActivityController | null = null
+  /**
+   * After IRIS finishes speaking, wait before uploading mic audio again. Echo of her own last
+   * words (especially email choices ending in an action verb) otherwise gets transcribed as the
+   * user and she acts on herself.
+   */
+  private micHangoverTimer: ReturnType<typeof setTimeout> | null = null
+  private static readonly MIC_HANGOVER_MS = 500
 
   async start(): Promise<void> {
     this.starting ??= this.doStart()
@@ -161,7 +168,7 @@ class AudioBridge {
     window.iris.on('voice:state', (state) => {
       this.onVoiceState(state)
       if (state !== 'speaking') this.toPlayer({ type: 'drain' })
-      this.toCapture({ type: 'enable', value: state !== 'asleep' })
+      this.syncCaptureGate(state)
     })
 
     window.iris.on('wake:listening', (listening) => {
@@ -181,7 +188,33 @@ class AudioBridge {
     else if (state === 'asleep') playEarcon(this.playbackContext, 'sleep')
   }
 
+  /**
+   * Only upload mic audio while genuinely listening. While IRIS is speaking or thinking, frames
+   * stay local — otherwise her own TTS is transcribed as the user (email mode looping on
+   * "delete"). Wake-word capture while asleep is a separate path in the worklet.
+   */
+  private syncCaptureGate(state: VoiceState): void {
+    if (this.micHangoverTimer) {
+      clearTimeout(this.micHangoverTimer)
+      this.micHangoverTimer = null
+    }
+
+    if (state === 'listening') {
+      this.micHangoverTimer = setTimeout(() => {
+        this.micHangoverTimer = null
+        this.toCapture({ type: 'enable', value: true })
+      }, AudioBridge.MIC_HANGOVER_MS)
+      return
+    }
+
+    this.toCapture({ type: 'enable', value: false })
+  }
+
   stop(): void {
+    if (this.micHangoverTimer) {
+      clearTimeout(this.micHangoverTimer)
+      this.micHangoverTimer = null
+    }
     this.activity?.stop()
     this.activity = null
     stopEarcons(this.playbackContext ?? undefined)

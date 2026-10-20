@@ -30,11 +30,18 @@ const SLOW_EMAIL_ACTIONS = new Set<EmailAction['type']>([
   'skipArticle'
 ])
 
+/**
+ * Actions that speak their own result (and usually the next header) through narrate(). They get
+ * SILENT_ACK so the model does not add a trailing "deleted that" after the next email has already
+ * been announced.
+ */
 const NARRATING_EMAIL_ACTIONS = new Set<EmailAction['type']>([
   'next',
   'delete',
   'move',
   'readMore',
+  'delete',
+  'move',
   'repeat',
   'saveArticle',
   'skipArticle'
@@ -48,7 +55,7 @@ export function classifyEmailUtterance(utterance: string): EmailAction | null {
   const moveMatch = text.match(/(?:move|file|put)\s+(?:it\s+|this\s+)?(?:to|in|into)\s+(.+)/)
   if (moveMatch) return { type: 'move', label: moveMatch[1].replace(/[.!?]+$/, '').trim() }
 
-  if (/\b(delete|trash|bin it|throw (it )?(a)?way|get rid of)\b/.test(text)) {
+  if (/\b(delete|trash|bin it|throw (it )?(a)?way|get rid of|discard)\b/.test(text)) {
     return { type: 'delete' }
   }
   if (/\b(read (it )?(more|the rest|it all)?|open( it)?|tell me more|what does it say)\b/.test(text)) {
@@ -118,6 +125,38 @@ export async function runStartEmailMode(): Promise<Record<string, unknown>> {
   return { started: true, note: STARTING_ACK }
 }
 
+/**
+ * One dispatch for every way an email action can arrive — the voice tool and the inbox buttons.
+ * Slow actions are claimed and run after return so IRIS can speak an ack first; quick ones are
+ * answered inline. Either way the outcome reaches the user's ear through the same narration.
+ */
+export async function runEmailAction(action: EmailAction): Promise<Record<string, unknown>> {
+  if (SLOW_EMAIL_ACTIONS.has(action.type)) {
+    if (!emailMode.tryBeginWork()) {
+      return { ok: false, error: 'Still working on that. Say so briefly and wait.' }
+    }
+    const ack = NARRATING_EMAIL_ACTIONS.has(action.type) ? SILENT_ACK : STARTING_ACK
+    return announceLater(() => emailMode.handle(action, true), ack)
+  }
+
+  return announce(await emailMode.handle(action))
+}
+
+/**
+ * The inbox buttons have no model turn to carry the outcome, so a refusal ("still working",
+ * "nothing open") or a quick result ("left email mode") is spoken directly. Slow actions narrate
+ * on their own through announceLater.
+ */
+export async function runEmailUiAction(action: EmailAction): Promise<{ ok: boolean }> {
+  const result = await runEmailAction(action)
+  const note = typeof result.error === 'string' ? result.error : result.note
+  const started = result.started === true
+  if (!started && typeof note === 'string' && note.trim()) {
+    void voice.inject('email', note)
+  }
+  return { ok: result.ok !== false }
+}
+
 export function registerEmailSkill(): void {
   registerTool({
     declaration: {
@@ -173,19 +212,7 @@ export function registerEmailSkill(): void {
     handler: async (args) => {
       const action = toEmailAction(args)
       if (!action) return { ok: false, error: 'I did not catch what to do. Ask them to repeat.' }
-
-      if (SLOW_EMAIL_ACTIONS.has(action.type)) {
-        if (!emailMode.tryBeginWork()) {
-          return {
-            ok: false,
-            error: 'Still working on that. Say so briefly and wait.'
-          }
-        }
-        const ack = NARRATING_EMAIL_ACTIONS.has(action.type) ? SILENT_ACK : STARTING_ACK
-        return announceLater(() => emailMode.handle(action, true), ack)
-      }
-
-      return announce(await emailMode.handle(action))
+      return runEmailAction(action)
     }
   })
 
