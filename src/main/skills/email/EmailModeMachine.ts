@@ -483,11 +483,9 @@ export class EmailModeMachine {
     })
 
     this.dispose('deleted')
-    // Confirm before the next header — if the note is left for announceLater, it lands after the
-    // following email has already been read and sounds like it applies to the wrong message.
-    await this.narrate(
-      'Say only that it is in the trash, in a few words. Do not ask for confirmation. Then wait.'
-    )
+    // No spoken confirmation — the user already said to delete. A follow-up "deleted" either
+    // lands after the next header or collides with a second tool call ("still working on that").
+    // Advance narrates the next email; that is the only speech.
     await this.advance()
     return { ok: true, note: '', narrated: true }
   }
@@ -510,9 +508,6 @@ export class EmailModeMachine {
         description: `moving the email from ${header.fromName} to ${label.name}`
       })
       this.dispose('moved')
-      await this.narrate(
-        `Say only that it is in ${label.name}, in a few words. Do not ask for confirmation. Then wait.`
-      )
       await this.advance()
       return { ok: true, note: '', narrated: true }
     } catch (error) {

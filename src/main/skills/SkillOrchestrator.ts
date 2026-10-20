@@ -53,7 +53,7 @@ export function classifyEmailUtterance(utterance: string): EmailAction | null {
   const moveMatch = text.match(/(?:move|file|put)\s+(?:it\s+|this\s+)?(?:to|in|into)\s+(.+)/)
   if (moveMatch) return { type: 'move', label: moveMatch[1].replace(/[.!?]+$/, '').trim() }
 
-  if (/\b(delete|trash|bin it|throw (it )?(a)?way|get rid of)\b/.test(text)) {
+  if (/\b(delete|trash|bin it|throw (it )?(a)?way|get rid of|discard)\b/.test(text)) {
     return { type: 'delete' }
   }
   if (/\b(read (it )?(more|the rest|it all)?|open( it)?|tell me more|what does it say)\b/.test(text)) {

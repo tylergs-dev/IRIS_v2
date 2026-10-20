@@ -53,14 +53,20 @@ export function truncateBody(body: string, limit = 12_000): string {
   return `${body.slice(0, limit)}\n\n[The rest of this email was too long to include.]`
 }
 
-/** Exact closing question after reading an email header — wording must not vary. */
-export const EMAIL_HEADER_CHOICE = 'Would you like to read more, skip, or delete?'
+/**
+ * Exact closing questions — wording must not vary.
+ *
+ * Deliberately avoids the bare words "delete", "skip", and "read more". Those are the tool
+ * triggers, and if the mic is open IRIS can hear herself say them and act on her own prompt.
+ * Ends on "trash it" rather than bare "delete", so a clipped echo of the last word is less
+ * likely to fire the delete tool on its own.
+ */
+export const EMAIL_HEADER_CHOICE = 'Would you like to read more, skip, or trash it?'
 
-/** Exact closing question after reading a summary — wording must not vary. */
 export const POST_SUMMARY_CHOICE_WITH_ARTICLES =
-  'Would you like to review articles, skip, or delete?'
+  'Would you like to review articles, skip, or trash it?'
 
-export const POST_SUMMARY_CHOICE = 'Would you like to skip or delete this email?'
+export const POST_SUMMARY_CHOICE = 'Would you like to skip, or trash it?'
 
 export function postSummaryChoice(articleCount: number): string {
   if (articleCount > 0) return POST_SUMMARY_CHOICE_WITH_ARTICLES
