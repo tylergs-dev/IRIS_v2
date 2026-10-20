@@ -30,6 +30,14 @@ export type SpeechPace = 'slow' | 'normal' | 'fast'
 export type SummaryLength = 'short' | 'detailed'
 
 /**
+ * Which unread mail email mode reads.
+ * - `primary`: the Primary tab only — what Gmail shows under Inbox when tabs are on. Excludes
+ *   Social, Promotions, Updates and Forums. This is the default.
+ * - `inbox`: every unread message with the INBOX label, including the other tabs.
+ */
+export type InboxScope = 'primary' | 'inbox'
+
+/**
  * The five questions worth asking before the user has seen the app work. Everything else in the
  * spec's list is more useful offered later, once they know what IRIS does.
  */
@@ -82,6 +90,7 @@ export interface UserProfile {
   knownLabels: string[]
   /** Short earcons while IRIS is working on a task. Default on for blind users. */
   activitySounds: boolean
+  inboxScope: InboxScope
 }
 
 export type SecretName =

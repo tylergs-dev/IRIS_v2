@@ -24,7 +24,8 @@ const defaults: UserProfile = {
   interests: [],
   notes: null,
   knownLabels: [],
-  activitySounds: true
+  activitySounds: true,
+  inboxScope: 'primary'
 }
 
 let store: JsonStore<UserProfile> | null = null

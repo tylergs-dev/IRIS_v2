@@ -107,8 +107,11 @@ export function EmailInbox(): React.JSX.Element | null {
 
   if (!email || email.phase === 'idle') return null
 
-  const { phase, queue, current, position, dispositions, offline, busy } = email
-  const remaining = queue.filter((header) => !dispositions[header.id]).length
+  const { phase, queue, queueLength, current, position, dispositions, offline, busy } = email
+  // queueLength is the inbox total from the id list; the queue itself fills in chunk by chunk.
+  const handled = queue.filter((header) => dispositions[header.id]).length
+  const remaining = Math.max(0, queueLength - handled)
+  const stillLoading = queueLength - queue.length
   const fetching = phase === 'fetchingQueue'
   const exhausted = phase === 'exhausted'
 
@@ -136,7 +139,7 @@ export function EmailInbox(): React.JSX.Element | null {
           <h2>Primary inbox</h2>
           <span className="hint">
             {account ? account.email : 'Gmail'}
-            {queue.length > 0 ? ` · ${remaining} of ${queue.length} unread left` : ''}
+            {queueLength > 0 ? ` · ${remaining} of ${queueLength} unread left` : ''}
           </span>
         </div>
         <div className="inbox-status">
@@ -163,7 +166,7 @@ export function EmailInbox(): React.JSX.Element | null {
 
       {!fetching && queue.length === 0 ? (
         <p className="inbox-empty" role="status">
-          There is no unread mail in the Primary inbox.
+          There is no unread mail in the inbox.
         </p>
       ) : null}
 
@@ -178,6 +181,12 @@ export function EmailInbox(): React.JSX.Element | null {
               disposition={dispositions[header.id]}
             />
           ))}
+          {stillLoading > 0 ? (
+            <li className="inbox-loading" role="status">
+              <span className="spinner" aria-hidden="true" />
+              Loading {stillLoading} more…
+            </li>
+          ) : null}
         </ol>
       ) : null}
 

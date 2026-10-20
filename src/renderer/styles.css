@@ -804,6 +804,15 @@ button {
   color: var(--ok);
 }
 
+.inbox-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 28px 12px 73px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
 .inbox-empty {
   flex: 1;
   display: flex;

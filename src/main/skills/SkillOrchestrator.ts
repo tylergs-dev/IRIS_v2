@@ -30,9 +30,16 @@ const SLOW_EMAIL_ACTIONS = new Set<EmailAction['type']>([
   'skipArticle'
 ])
 
+/**
+ * Actions that speak their own result (and usually the next header) through narrate(). They get
+ * SILENT_ACK so the model does not add a trailing "deleted that" after the next email has already
+ * been announced.
+ */
 const NARRATING_EMAIL_ACTIONS = new Set<EmailAction['type']>([
   'next',
   'readMore',
+  'delete',
+  'move',
   'repeat',
   'saveArticle',
   'skipArticle'

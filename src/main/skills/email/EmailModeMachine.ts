@@ -74,6 +74,16 @@ export class EmailModeMachine {
   /** What became of each message the queue has moved past, for the inbox view. */
   private dispositions: Record<string, EmailDisposition> = {}
 
+  /**
+   * How many messages the inbox holds, known from the id list before their headers arrive. The
+   * queue grows towards it chunk by chunk; once loading ends it is pinned to the queue length.
+   */
+  private total = 0
+  /** True while headers are still arriving behind the reader. */
+  private loading = false
+  /** Woken on every chunk and when loading ends, for a reader who has caught up with the loader. */
+  private wakeReaders: Array<() => void> = []
+
   private currentBody: EmailBody | null = null
   private articles: ArticleCandidate[] = []
   private articleIndex = -1
@@ -152,7 +162,7 @@ export class EmailModeMachine {
       phase: this.phase,
       // Null rather than out-of-range once the queue is exhausted, so nothing renders "4 of 3".
       position: current ? this.position + 1 : null,
-      queueLength: this.queue.length,
+      queueLength: Math.max(this.total, this.queue.length),
       current: current ?? null,
       queue: this.queue,
       dispositions: { ...this.dispositions },
@@ -210,7 +220,7 @@ export class EmailModeMachine {
     const generation = this.startGeneration
     this.offline = false
     try {
-      this.queue = await gmail.listPrimaryUnread()
+      await this.loadInbox(generation)
     } catch (error) {
       if (generation !== this.startGeneration) {
         return { ok: false, note: 'Left email mode.' }
@@ -235,7 +245,9 @@ export class EmailModeMachine {
       }
 
       this.offline = true
+      this.loading = false
       this.queue = cached.headers
+      this.total = cached.headers.length
       log.info(`offline email mode with ${this.queue.length} cached headers`)
       await this.narrate(
         `You cannot reach Gmail right now, but you still have the inbox as it was ` +
@@ -254,7 +266,7 @@ export class EmailModeMachine {
       return { ok: true, note: 'There is no unread mail in the primary inbox. Say so briefly.' }
     }
 
-    log.info(`queued ${this.queue.length} unread messages`)
+    log.info(`queued ${this.queue.length} of ${this.total} unread messages; starting`)
     await this.readCurrentHeader(0)
     if (generation !== this.startGeneration) {
       return { ok: false, note: 'Left email mode.' }
@@ -262,8 +274,67 @@ export class EmailModeMachine {
     return { ok: true, note: '', narrated: true }
   }
 
+  /**
+   * Starts the inbox fetch and returns as soon as the first headers are in — or, for an empty
+   * inbox, when the fetch finishes. Loading of the remainder carries on in the background, feeding
+   * the queue chunk by chunk. Rejects only if nothing at all could be fetched; a load that fails
+   * part-way keeps what arrived and pins the total to it.
+   */
+  private async loadInbox(generation: number): Promise<void> {
+    this.loading = true
+
+    let firstChunk!: () => void
+    const firstChunkArrived = new Promise<void>((resolve) => {
+      firstChunk = resolve
+    })
+
+    const whole = gmail.listPrimaryUnread((loaded, total) => {
+      if (generation !== this.startGeneration) return
+      this.queue = loaded
+      this.total = total
+      firstChunk()
+      this.wakeUpReaders()
+      emit('email:snapshot', this.snapshot())
+    })
+
+    const finish = (): void => {
+      if (generation !== this.startGeneration) return
+      this.loading = false
+      this.total = this.queue.length
+      this.wakeUpReaders()
+      emit('email:snapshot', this.snapshot())
+    }
+
+    // Background completion: either way, loading is over and anyone waiting on more can move on.
+    void whole
+      .then((all) => {
+        if (generation !== this.startGeneration) return
+        this.queue = all
+        if (all.length < this.total) {
+          log.warn(`only ${all.length} of ${this.total} headers loaded; reading those`)
+        }
+        finish()
+      })
+      .catch(() => finish())
+
+    // The first chunk is what starts the reading; the whole fetch resolving first means an empty
+    // inbox (or a failure, which rethrows here so the offline fallback can take over).
+    await Promise.race([firstChunkArrived, whole])
+  }
+
+  private wakeUpReaders(): void {
+    const waiting = this.wakeReaders
+    this.wakeReaders = []
+    for (const wake of waiting) wake()
+  }
+
+  /** Resolves when another chunk has landed or loading has ended, whichever comes first. */
+  private moreHeaders(): Promise<void> {
+    return new Promise((resolve) => this.wakeReaders.push(resolve))
+  }
+
   stop(): ActionOutcome {
-    const remaining = Math.max(0, this.queue.length - (this.position + 1))
+    const remaining = Math.max(0, Math.max(this.total, this.queue.length) - (this.position + 1))
     this.inFlight = false
     this.startGeneration += 1
     this.reset()
@@ -281,6 +352,9 @@ export class EmailModeMachine {
     this.queue = []
     this.position = -1
     this.dispositions = {}
+    this.total = 0
+    this.loading = false
+    this.wakeUpReaders()
     this.currentBody = null
     this.articles = []
     this.articleIndex = -1
@@ -297,6 +371,15 @@ export class EmailModeMachine {
     this.articleIndex = -1
     this.pendingArticleLinks = []
 
+    // The reader has caught up with the loader: more mail exists, its headers just have not
+    // arrived yet. Wait for the next chunk rather than announcing the end of a full inbox.
+    const generation = this.startGeneration
+    while (!this.current() && this.loading) {
+      this.setPhase('fetchingQueue')
+      await this.moreHeaders()
+      if (generation !== this.startGeneration) return
+    }
+
     const header = this.current()
     if (!header) {
       this.setPhase('exhausted')
@@ -308,7 +391,7 @@ export class EmailModeMachine {
 
     this.setPhase('readingHeader')
     await this.narrate(
-      headerAnnouncement(header, describeDate(header.date), position + 1, this.queue.length)
+      headerAnnouncement(header, describeDate(header.date), position + 1, this.snapshot().queueLength)
     )
     this.setPhase('awaitingHeaderChoice')
   }
@@ -400,13 +483,13 @@ export class EmailModeMachine {
     })
 
     this.dispose('deleted')
+    // Confirm before the next header — if the note is left for announceLater, it lands after the
+    // following email has already been read and sounds like it applies to the wrong message.
+    await this.narrate(
+      'Say only that it is in the trash, in a few words. Do not ask for confirmation. Then wait.'
+    )
     await this.advance()
-    return {
-      ok: true,
-      note:
-        'Moved to the trash, recoverable for thirty days. Confirm in a few words and move on. ' +
-        'Do not ask for confirmation.'
-    }
+    return { ok: true, note: '', narrated: true }
   }
 
   private async handleMove(labelName: string): Promise<ActionOutcome> {
@@ -427,8 +510,11 @@ export class EmailModeMachine {
         description: `moving the email from ${header.fromName} to ${label.name}`
       })
       this.dispose('moved')
+      await this.narrate(
+        `Say only that it is in ${label.name}, in a few words. Do not ask for confirmation. Then wait.`
+      )
       await this.advance()
-      return { ok: true, note: `Moved to ${label.name}. Confirm briefly and move on.` }
+      return { ok: true, note: '', narrated: true }
     } catch (error) {
       log.error('move failed', error)
       return { ok: false, note: 'I could not move that email. Say so and offer to try again.' }
@@ -450,7 +536,12 @@ export class EmailModeMachine {
     }
 
     await this.narrate(
-      headerAnnouncement(header, describeDate(header.date), this.position + 1, this.queue.length)
+      headerAnnouncement(
+        header,
+        describeDate(header.date),
+        this.position + 1,
+        this.snapshot().queueLength
+      )
     )
     return { ok: true, note: '', narrated: true }
   }

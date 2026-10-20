@@ -1,5 +1,11 @@
 import { useState } from 'react'
-import type { SecretName, SpeechPace, SummaryLength, UserProfile } from '@shared/types'
+import type {
+  InboxScope,
+  SecretName,
+  SpeechPace,
+  SummaryLength,
+  UserProfile
+} from '@shared/types'
 import { DEFAULT_VOICE, LIVE_VOICES, type VoiceName } from '@shared/voices'
 import { useStore } from '../store'
 
@@ -302,6 +308,27 @@ export function Settings(): React.JSX.Element {
                 she speaks again.
               </span>
             </div>
+          </div>
+        </section>
+
+        <section className="card">
+          <h3>Email</h3>
+          <p>
+            By default IRIS reads only unread mail in Gmail’s Primary tab — the same list as the
+            Inbox when tabs are on. Social, Promotions, Updates and Forums are left alone.
+          </p>
+          <div className="field">
+            <label htmlFor="inbox-scope">Which mail to read</label>
+            <select
+              id="inbox-scope"
+              value={
+                profile?.inboxScope === 'inbox' ? 'inbox' : 'primary'
+              }
+              onChange={(event) => patch({ inboxScope: event.target.value as InboxScope })}
+            >
+              <option value="primary">Primary tab (unread only)</option>
+              <option value="inbox">Entire inbox, all tabs (unread only)</option>
+            </select>
           </div>
         </section>
 

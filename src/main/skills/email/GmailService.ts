@@ -13,27 +13,45 @@ import { extractBody, toHeader } from './parse'
 const log = createLogger('gmail')
 
 /**
- * Gmail's label for the Primary tab. It is CATEGORY_PERSONAL, not CATEGORY_PRIMARY; the other tabs
- * are CATEGORY_PROMOTIONS, CATEGORY_SOCIAL, CATEGORY_UPDATES and CATEGORY_FORUMS. Filtering by
- * label rather than a `q` search keeps the result exact: a message is in Primary or it is not.
+ * Tabs that are not Primary. A message is in Primary when it is in the inbox and carries none of
+ * these — including mail with no CATEGORY_* label at all. Search operators for this have returned
+ * empty on real accounts while the INBOX label still had hundreds of unread, so Primary is decided
+ * by reading each message's labelIds rather than by `q`.
  */
-const PRIMARY_LABEL = 'CATEGORY_PERSONAL'
-const CATEGORY_LABEL_PREFIX = 'CATEGORY_'
+const OTHER_TAB_LABELS = [
+  'CATEGORY_SOCIAL',
+  'CATEGORY_PROMOTIONS',
+  'CATEGORY_UPDATES',
+  'CATEGORY_FORUMS'
+] as const
+
+/** Fast attempts before the label scan. Either can be empty even when Primary is not. */
+const PRIMARY_SEARCH_QUERIES = [
+  'in:inbox is:unread category:primary',
+  'in:inbox is:unread -category:social -category:promotions -category:updates -category:forums'
+] as const
 
 /** The largest page `messages.list` will return. */
 const LIST_PAGE_SIZE = 500
 
 /**
- * Not a product cap: the queue is meant to hold the whole Primary tab. This only stops a mailbox
- * with thousands of unread messages from keeping "fetching" on screen for minutes.
+ * Not a product cap: the queue is meant to hold the whole inbox. This only stops a mailbox with
+ * thousands of unread messages from loading for minutes on end.
  */
 const MAX_UNREAD = 2000
 
-/** Parallel `messages.get` calls. High enough to be quick, low enough to stay under the rate limit. */
-const METADATA_CONCURRENCY = 8
+/**
+ * Header loading is paced against Gmail's per-user quota of 250 units per second, where a
+ * `messages.get` costs 5. Eight gets a second is 40 units — a sixth of the budget, leaving room
+ * for the rest of the app and for a second IRIS on the same account. Chunks are what the reader
+ * sees arrive: the first one is enough to start on; the rest load while the user is listening.
+ */
+const GET_INTERVAL_MS = 125
+const METADATA_CONCURRENCY = 3
+const HEADER_CHUNK = 20
 
-/** How many unread inbox messages to inspect when deciding whether the account uses tabs at all. */
-const CATEGORY_SAMPLE_SIZE = 25
+/** Called as each chunk of headers lands. `loaded` is the whole list so far, in inbox order. */
+export type HeaderProgress = (loaded: EmailHeader[], total: number) => void
 
 /** Two quota units per call, so once a minute is comfortably inside the daily budget. */
 const POLL_INTERVAL_MS = 90_000
@@ -138,30 +156,33 @@ export class GmailService {
   }
 
   /**
-   * Every unread message in the Primary tab, newest first.
+   * Unread mail for email mode, newest first, delivered in chunks.
    *
-   * `labelIds` is an AND filter, so INBOX + UNREAD + CATEGORY_PERSONAL is exactly "unread in
-   * Primary". Promotions, Social, Updates and Forums never match. The list is paged to the end
-   * rather than taking the first page, so a busy inbox is read in full.
+   * Default is the Primary tab only — inbox messages that are not in Social / Promotions /
+   * Updates / Forums. That is what Gmail shows as Inbox when tabs are on. The full INBOX label
+   * also holds those other tabs and can be hundreds of messages larger.
+   *
+   * Id listing settles the total up front. Headers then load in paced chunks via `onProgress`
+   * so reading can start after the first twenty. A fetch that fails part-way keeps what arrived;
+   * only a failure before the first header rejects.
    */
-  async listPrimaryUnread(): Promise<EmailHeader[]> {
+  async listPrimaryUnread(onProgress?: HeaderProgress): Promise<EmailHeader[]> {
     const api = await this.ensureApi()
+    // Older profiles may still have the removed "auto" value; treat it as Primary.
+    const rawScope = getProfile().inboxScope as string
+    const scope = rawScope === 'inbox' ? 'inbox' : 'primary'
 
-    let ids = await this.listAllIds(api, ['INBOX', 'UNREAD', PRIMARY_LABEL])
+    const ids =
+      scope === 'inbox'
+        ? await this.listAllIds(api, { labelIds: ['INBOX', 'UNREAD'] })
+        : await this.listPrimaryIds(api)
 
-    if (ids.length === 0 && !(await this.inboxUsesCategories(api))) {
-      // Some accounts carry no CATEGORY_* labels at all, so Primary is not a thing there and the
-      // whole inbox is what the user sees as their mail. Only reached when the sample found no
-      // categories; an account whose Primary is simply empty stays empty.
-      log.info('no category labels on unread inbox mail; tabs are off, reading the whole inbox')
-      ids = await this.listAllIds(api, ['INBOX', 'UNREAD'])
-    }
-
+    log.info(`unread for email mode: ${ids.length} (scope ${scope})`)
     if (ids.length === 0) return []
 
-    // Two-phase fetch: metadata for the queue, full bodies only for what is actually opened.
-    // Bounded concurrency, because a few hundred simultaneous requests trip the per-user rate limit.
-    const headers = await mapWithConcurrency(ids, METADATA_CONCURRENCY, async (id) => {
+    const headers: EmailHeader[] = []
+    const fetchHeader = async (id: string): Promise<EmailHeader> => {
+      await pacer.wait()
       const message = await withRateLimitRetry(() =>
         api.users.messages.get({
           userId: 'me',
@@ -172,15 +193,115 @@ export class GmailService {
         })
       )
       return toHeader(message.data)
-    })
+    }
 
-    // Kept so that "do my emails" still has an answer when the network is down later.
-    cacheHeaders(headers)
+    for (let start = 0; start < ids.length; start += HEADER_CHUNK) {
+      const chunk = ids.slice(start, start + HEADER_CHUNK)
+      try {
+        headers.push(...(await mapWithConcurrency(chunk, METADATA_CONCURRENCY, fetchHeader)))
+      } catch (error) {
+        if (headers.length === 0) throw error
+        log.error(
+          `header loading stopped after ${headers.length} of ${ids.length}; reading what arrived`,
+          error
+        )
+        break
+      }
+      // Kept so that "do my emails" still has an answer when the network is down later. Written
+      // per chunk so an interrupted load still leaves the newest mail behind.
+      cacheHeaders(headers)
+      onProgress?.(headers.slice(), ids.length)
+    }
+
     return headers
   }
 
-  /** Follows `nextPageToken` until Gmail runs out of messages or MAX_UNREAD is reached. */
-  private async listAllIds(api: gmail_v1.Gmail, labelIds: string[]): Promise<string[]> {
+  /**
+   * Ids of unread Primary-tab messages. Tries Gmail search first; if search returns nothing
+   * (which it has on this account while the inbox still had hundreds of unread), falls back to
+   * listing every unread inbox message and dropping those filed under another tab.
+   */
+  private async listPrimaryIds(api: gmail_v1.Gmail): Promise<string[]> {
+    for (const q of PRIMARY_SEARCH_QUERIES) {
+      const ids = await this.listAllIds(api, { q })
+      log.info(`primary search ${JSON.stringify(q)} -> ${ids.length}`)
+      if (ids.length > 0) return ids
+    }
+
+    const personal = await this.listAllIds(api, {
+      labelIds: ['INBOX', 'UNREAD', 'CATEGORY_PERSONAL']
+    })
+    log.info(`primary via CATEGORY_PERSONAL label -> ${personal.length}`)
+
+    const inboxUnread = await this.listAllIds(api, { labelIds: ['INBOX', 'UNREAD'] })
+    log.info(`scanning ${inboxUnread.length} unread inbox messages for Primary tab membership`)
+    if (inboxUnread.length === 0) return personal
+
+    const primary = await this.filterPrimaryIds(api, inboxUnread)
+    log.info(`primary after label filter -> ${primary.length}`)
+
+    // Prefer the filtered list; if somehow every message was filed under another tab, keep the
+    // Personal-label result rather than returning nothing when Personal had mail.
+    if (primary.length > 0) return primary
+    return personal
+  }
+
+  /**
+   * Keeps messages that belong on the Primary tab: in the candidate set (already INBOX+UNREAD)
+   * and not labelled Social / Promotions / Updates / Forums. Preserves inbox order.
+   */
+  private async filterPrimaryIds(api: gmail_v1.Gmail, ids: string[]): Promise<string[]> {
+    const excluded = new Set<string>(OTHER_TAB_LABELS)
+    const isPrimary = ids.map(() => false)
+    let sampleLogged = 0
+    let keptSoFar = 0
+
+    const inspect = async (id: string, index: number): Promise<void> => {
+      await pacer.wait()
+      const message = await withRateLimitRetry(() =>
+        api.users.messages.get({
+          userId: 'me',
+          id,
+          format: 'minimal',
+          fields: 'id,labelIds'
+        })
+      )
+      const labels = message.data.labelIds ?? []
+      if (sampleLogged < 8) {
+        sampleLogged += 1
+        const categories = labels.filter((label) => label.startsWith('CATEGORY_'))
+        log.info(`sample ${id}: ${categories.length > 0 ? categories.join(',') : '(no category)'}`)
+      }
+      if (labels.some((label) => excluded.has(label))) return
+      isPrimary[index] = true
+      keptSoFar += 1
+    }
+
+    // Same pacing as header loads — stays inside the per-user quota. Only labelIds, not bodies.
+    for (let start = 0; start < ids.length; start += HEADER_CHUNK) {
+      const chunk = ids.slice(start, start + HEADER_CHUNK)
+      await mapWithConcurrency(chunk, METADATA_CONCURRENCY, (id, offset) =>
+        inspect(id, start + offset)
+      )
+      if ((start / HEADER_CHUNK) % 5 === 4 || start + HEADER_CHUNK >= ids.length) {
+        log.info(
+          `primary scan ${Math.min(start + HEADER_CHUNK, ids.length)}/${ids.length} (${keptSoFar} kept)`
+        )
+      }
+    }
+
+    return ids.filter((_, index) => isPrimary[index])
+  }
+
+  /**
+   * Follows `nextPageToken` until Gmail runs out of messages or MAX_UNREAD is reached.
+   * Pass either `labelIds` or a full search `q`, not both — combining them AND-filters in ways
+   * that have emptied Primary results on real accounts.
+   */
+  private async listAllIds(
+    api: gmail_v1.Gmail,
+    filter: { labelIds: string[]; q?: undefined } | { q: string; labelIds?: undefined }
+  ): Promise<string[]> {
     const ids: string[] = []
     let pageToken: string | undefined
 
@@ -188,7 +309,8 @@ export class GmailService {
       const response = await withRateLimitRetry(() =>
         api.users.messages.list({
           userId: 'me',
-          labelIds,
+          ...(filter.labelIds ? { labelIds: filter.labelIds } : {}),
+          ...(filter.q ? { q: filter.q } : {}),
           // Default, but stated so a later refactor cannot quietly start reading spam aloud.
           includeSpamTrash: false,
           maxResults: LIST_PAGE_SIZE,
@@ -207,35 +329,6 @@ export class GmailService {
       return ids.slice(0, MAX_UNREAD)
     }
     return ids
-  }
-
-  /**
-   * Whether Gmail is stamping CATEGORY_* labels on this inbox. Looks at a sample of unread inbox
-   * mail; any category label on any of it means tabs are in play and an empty Primary is real.
-   * An empty inbox counts as categorised, since there is nothing to read either way.
-   */
-  private async inboxUsesCategories(api: gmail_v1.Gmail): Promise<boolean> {
-    const response = await withRateLimitRetry(() =>
-      api.users.messages.list({
-        userId: 'me',
-        labelIds: ['INBOX', 'UNREAD'],
-        includeSpamTrash: false,
-        maxResults: CATEGORY_SAMPLE_SIZE,
-        fields: 'messages/id'
-      })
-    )
-    const sampleIds = (response.data.messages ?? []).map((message) => message.id).filter(Boolean)
-    if (sampleIds.length === 0) return true
-
-    const labelSets = await mapWithConcurrency(sampleIds, METADATA_CONCURRENCY, async (id) => {
-      const message = await withRateLimitRetry(() =>
-        api.users.messages.get({ userId: 'me', id: id!, format: 'minimal', fields: 'labelIds' })
-      )
-      return message.data.labelIds ?? []
-    })
-    return labelSets.some((labels) =>
-      labels.some((label) => label.startsWith(CATEGORY_LABEL_PREFIX))
-    )
   }
 
   async getBody(id: string): Promise<EmailBody> {
@@ -394,20 +487,48 @@ function isRateLimited(error: unknown): boolean {
   return code === 403 && /rate ?limit|quota/i.test(message ?? '')
 }
 
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
 /**
- * Retries a Gmail call a few times with backoff when the rate limit bites. Anything else is
- * rethrown as-is, so a real failure still surfaces at once.
+ * Spaces request starts so the whole process stays under Gmail's per-user quota, however many
+ * callers are in flight. When Gmail pushes back anyway, `hold` parks every waiter at once —
+ * one 403 should slow the whole fetch down, not just the request that happened to receive it.
  */
-async function withRateLimitRetry<T>(call: () => Promise<T>, attempts = 4): Promise<T> {
-  let delay = 500
+class Pacer {
+  private nextStart = 0
+
+  constructor(private readonly intervalMs: number) {}
+
+  async wait(): Promise<void> {
+    const now = Date.now()
+    const start = Math.max(now, this.nextStart)
+    this.nextStart = start + this.intervalMs
+    if (start > now) await sleep(start - now)
+  }
+
+  hold(ms: number): void {
+    this.nextStart = Math.max(this.nextStart, Date.now() + ms)
+  }
+}
+
+const pacer = new Pacer(GET_INTERVAL_MS)
+
+/**
+ * Retries a Gmail call with backoff when the rate limit bites. The limit is per minute, so the
+ * waits are long enough to actually let the window roll over rather than hammering straight
+ * back into it. Anything other than a rate limit is rethrown as-is.
+ */
+async function withRateLimitRetry<T>(call: () => Promise<T>, attempts = 6): Promise<T> {
+  let delay = 2_000
   for (let attempt = 1; ; attempt += 1) {
     try {
       return await call()
     } catch (error) {
       if (!isRateLimited(error) || attempt >= attempts) throw error
-      log.warn(`rate limited; retrying in ${delay}ms (attempt ${attempt} of ${attempts})`)
-      await new Promise((resolve) => setTimeout(resolve, delay))
-      delay *= 2
+      log.warn(`rate limited; pausing ${delay}ms (attempt ${attempt} of ${attempts})`)
+      pacer.hold(delay)
+      await sleep(delay)
+      delay = Math.min(delay * 2, 30_000)
     }
   }
 }
@@ -416,7 +537,7 @@ async function withRateLimitRetry<T>(call: () => Promise<T>, attempts = 4): Prom
 async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
-  fn: (item: T) => Promise<R>
+  fn: (item: T, index: number) => Promise<R>
 ): Promise<R[]> {
   const results = new Array<R>(items.length)
   let next = 0
@@ -425,7 +546,7 @@ async function mapWithConcurrency<T, R>(
     while (next < items.length) {
       const index = next
       next += 1
-      results[index] = await fn(items[index])
+      results[index] = await fn(items[index], index)
     }
   }
 
